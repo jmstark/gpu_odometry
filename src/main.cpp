@@ -31,7 +31,12 @@ int main(int argc, char *argv[])
     K <<    517.3, 0.0, 318.6,
             0.0, 516.5, 255.3,
             0.0, 0.0, 1.0;
-    dataFolder = "/work/maierr/rgbd_data/rgbd_dataset_freiburg1_xyz/";
+    if(argc<2)
+    {
+      std::cerr<<"Usage: ./dvo <path to data folder>\n";
+      return 1;
+    }
+    dataFolder = argv[1];
     //dataFolder = "/work/maierr/rgbd_data/rgbd_dataset_freiburg1_desk2/";
 #else
     dataFolder = "/work/maierr/rgbd_data/rgbd_dataset_freiburg3_long_office_household/";
