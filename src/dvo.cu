@@ -352,9 +352,65 @@ void DVO::calculateErrorImage(const float* residuals, int w, int h, cv::Mat &err
 }
 
 
+
+__device__ float d_interpolate(const float* ptrImgIntensity, float x, float y, int w, int h)
+{
+    float valCur = nan("");
+
+#if 0
+    // direct lookup, no interpolation
+    int x0 = static_cast<int>(x + 0.5f);
+    int y0 = static_cast<int>(y + 0.5f);
+    if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h)
+        valCur = ptrImgIntensity[y0*w + x0];
+#else
+    //bilinear interpolation
+    int x0 = static_cast<int>(x);
+    int y0 = static_cast<int>(y);
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+
+    float x1_weight = x - static_cast<float>(x0);
+    float y1_weight = y - static_cast<float>(y0);
+    float x0_weight = 1.0f - x1_weight;
+    float y0_weight = 1.0f - y1_weight;
+
+    if (x0 < 0 || x0 >= w)
+        x0_weight = 0.0f;
+    if (x1 < 0 || x1 >= w)
+        x1_weight = 0.0f;
+    if (y0 < 0 || y0 >= h)
+        y0_weight = 0.0f;
+    if (y1 < 0 || y1 >= h)
+        y1_weight = 0.0f;
+    float w00 = x0_weight * y0_weight;
+    float w10 = x1_weight * y0_weight;
+    float w01 = x0_weight * y1_weight;
+    float w11 = x1_weight * y1_weight;
+
+    float sumWeights = w00 + w10 + w01 + w11;
+    float sum = 0.0f;
+    if (w00 > 0.0f)
+        sum += ptrImgIntensity[y0*w + x0] * w00;
+    if (w01 > 0.0f)
+        sum += ptrImgIntensity[y1*w + x0] * w01;
+    if (w10 > 0.0f)
+        sum += ptrImgIntensity[y0*w + x1] * w10;
+    if (w11 > 0.0f)
+        sum += ptrImgIntensity[y1*w + x1] * w11;
+
+    if (sumWeights > 0.0f)
+        valCur = sum / sumWeights;
+#endif
+
+    return valCur;
+}
+
+
 texture<float,2,cudaReadModeElementType> texGrayCur;
 __global__ void g_residualKernel(const float* d_ptrGrayRef,
                             const float* d_ptrDepthRef,
+                            const float* d_ptrGrayCur,
                             const float* d_ptrRotation,
                             const float* d_ptrTranslation,
                             float fx, float fy, float cx, float cy, int w,int h,
@@ -398,11 +454,19 @@ __global__ void g_residualKernel(const float* d_ptrGrayRef,
                 float x2 = (fx * x1 + cx * z1) / z1;
                 float y2 = (fy * y1 + cy * z1) / z1;
 
-                if(x2 >= 0 && x2 < w && y2 >= 0 && y2 < h) {
+                float valCur = d_interpolate(d_ptrGrayCur, x2, y2, w, h);
+                if (!isnan(valCur))
+                {
+                    float valRef = d_ptrGrayRef[idx];
+                    float valDiff = valRef - valCur;
+                    residual = valDiff;
+                }
+
+                /*if(x2 >= 0 && x2 < w && y2 >= 0 && y2 < h) {
                     // interpolate
                     float valCur = tex2D(texGrayCur, x2, y2);
                     residual = d_ptrGrayRef[idx] - valCur;
-                }
+                }*/
             }
         }
         d_residuals[idx] = residual;
@@ -443,13 +507,14 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     cudaMalloc(&d_ptrGrayCur, w*h*sizeof(float));
     cudaMemcpy(d_ptrGrayCur, (const float*)grayCur.data, w*h*sizeof(float), cudaMemcpyHostToDevice);
 
-    texGrayCur.addressMode[0] = cudaAddressModeClamp;
+    /*texGrayCur.addressMode[0] = cudaAddressModeClamp;
     texGrayCur.addressMode[1] = cudaAddressModeClamp;
     texGrayCur.filterMode = cudaFilterModeLinear;
     texGrayCur.normalized = false;
     cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
 
     cudaBindTexture2D(NULL, &texGrayCur, d_ptrGrayCur, &desc, w, h, w * sizeof(d_ptrGrayCur[0]));
+    */
 
     float* d_ptrRotation;
     cudaMalloc(&d_ptrRotation, 9*sizeof(float));
@@ -465,7 +530,7 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
 
-    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrRotation,
+    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_ptrRotation,
                                 d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
 
@@ -476,7 +541,7 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     cudaFree(d_ptrRotation);
     cudaFree(d_ptrTranslation);
     cudaFree(d_residuals);
-    cudaUnbindTexture(texGrayCur);
+    //cudaUnbindTexture(texGrayCur);
     cudaFree(d_ptrGrayCur);
 }
 
@@ -783,7 +848,7 @@ void DVO::align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<c
             deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, residuals_[lvl], J_[lvl]);
 #endif
 
-#if 1
+#if 0
             // compute and show error image
             cv::Mat errorImage;
             calculateErrorImage(residuals_[lvl], grayRef.cols, grayRef.rows, errorImage);
