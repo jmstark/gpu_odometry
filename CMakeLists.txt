@@ -23,6 +23,9 @@ INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 # OpenCV
 FIND_PACKAGE(OpenCV 2.4.8 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED)
 
+# CUDA
+FIND_PACKAGE(CUDA REQUIRED)
+
 #==============================================================================
 # Application
 #==============================================================================
@@ -36,6 +39,6 @@ ADD_DEFINITIONS(-DDVO_SOURCE_DIR=${PROJECT_SOURCE_DIR})
 FILE(GLOB incs "src/*.hpp")
 FILE(GLOB srcs "src/*.cpp")
 
-ADD_EXECUTABLE(dvo_cpu ${incs} ${srcs} )
+CUDA_ADD_EXECUTABLE(dvo_cpu ${incs} ${srcs} )
 TARGET_LINK_LIBRARIES(dvo_cpu ${OpenCV_LIBS})
 
