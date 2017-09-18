@@ -1,7 +1,7 @@
 # Copyright (c) 2015 Robert Maier
 CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 
-PROJECT(DvoCpu C CXX)
+PROJECT(DvoGpu C CXX)
 
 # RelWithDebInfo, Release or Debug
 SET(CMAKE_BUILD_TYPE RelWithDebInfo FORCE)
@@ -30,7 +30,7 @@ FIND_PACKAGE(CUDA REQUIRED)
 # Application
 #==============================================================================
 
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O1 -funroll-loops" )
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O1 -funroll-loops -D_FORCE_INLINES" )
 
 # preprocessor define: source directory
 ADD_DEFINITIONS(-DDVO_SOURCE_DIR=${PROJECT_SOURCE_DIR})
@@ -38,7 +38,8 @@ ADD_DEFINITIONS(-DDVO_SOURCE_DIR=${PROJECT_SOURCE_DIR})
 # applications
 FILE(GLOB incs "src/*.hpp")
 FILE(GLOB srcs "src/*.cpp")
+FILE(GLOB srcscu "src/*.cu")
 
-CUDA_ADD_EXECUTABLE(dvo_cpu ${incs} ${srcs} )
-TARGET_LINK_LIBRARIES(dvo_cpu ${OpenCV_LIBS})
+CUDA_ADD_EXECUTABLE(dvo_gpu ${incs} ${srcs} ${srcscu})
+TARGET_LINK_LIBRARIES(dvo_gpu ${OpenCV_LIBS})
 

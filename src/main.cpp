@@ -49,6 +49,7 @@ int main(int argc, char *argv[])
 
     // load file names
     std::string assocFile = dataFolder + "rgbd_assoc.txt";
+    std::cout << assocFile << std::endl;
     std::vector<std::string> filesColor;
     std::vector<std::string> filesDepth;
     std::vector<double> timestampsDepth;
