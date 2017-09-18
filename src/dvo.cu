@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <iomanip>
 
 #include <Eigen/Cholesky>
 #include <sophus/se3.hpp>
@@ -727,9 +728,9 @@ void DVO::align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<c
 #if 0
             // compute and show error image
             cv::Mat errorImage;
-            calculateErrorImage(residuals_[level], grayRef.cols, grayRef.rows, errorImage);
+            calculateErrorImage(residuals_[lvl], grayRef.cols, grayRef.rows, errorImage);
             std::stringstream ss;
-            ss << dataFolder << "residuals_" << level << "_";
+            ss << "residuals_" << lvl << "_";
             ss << std::setw(2) << std::setfill('0') << itr << ".png";
             cv::imwrite(ss.str(), errorImage);
             cv::imshow("error", errorImage);
