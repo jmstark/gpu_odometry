@@ -4,12 +4,16 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <iomanip>
+
 
 #include <Eigen/Cholesky>
 #include <sophus/se3.hpp>
 
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
+
+#include <cuda_runtime.h>
 
 
 DVO::DVO() :
@@ -348,6 +352,64 @@ void DVO::calculateErrorImage(const float* residuals, int w, int h, cv::Mat &err
 }
 
 
+texture<float,2,cudaReadModeElementType> texGrayCur;
+__global__ void g_residualKernel(const float* d_ptrGrayRef,
+                            const float* d_ptrDepthRef,
+                            const float* d_ptrRotation,
+                            const float* d_ptrTranslation,
+                            float fx, float fy, float cx, float cy, int w,int h,
+                            float* d_residuals)
+{
+    int x = threadIdx.x + blockDim.x*blockIdx.x;
+    int y = threadIdx.y + blockDim.y*blockIdx.y;
+
+    // valid thread index
+    if(x < w && y < h) {
+
+        size_t idx = x + y*w;
+        float residual = 0.0f;
+
+        // backproject 2d pixel
+        float dRef = d_ptrDepthRef[idx];
+
+        // continue if valid depth data is available
+        if(dRef > 0.0) {
+            // to camera coordinates
+            float x0 = (static_cast<float>(x) - cx) * 1.0f/fx;
+            float y0 = (static_cast<float>(y) - cy) * 1.0f/fy;
+            float homo = 1.0f;
+
+            // apply known depth; to 3D coordinates
+            x0  *= dRef;
+            y0  *= dRef;
+            float z0 = homo * dRef;
+
+            // rotate and translate; Eigen uses column-major
+            float x1 = d_ptrRotation[0] * x0 + d_ptrRotation[3] * y0 +
+                        d_ptrRotation[6] * z0 + d_ptrTranslation[0];
+            float y1 = d_ptrRotation[1] * x0 + d_ptrRotation[4] * y0 +
+                        d_ptrRotation[7] * z0 + d_ptrTranslation[1];
+            float z1 = d_ptrRotation[2] * x0 + d_ptrRotation[5] * y0 +
+                        d_ptrRotation[8] * z0 + d_ptrTranslation[2];
+
+            if(z1 > 0.0f) {
+                // project onto 2nd frame
+
+                float x2 = (fx * x1 + cx * z1) / z1;
+                float y2 = (fy * y1 + cy * z1) / z1;
+
+                if(x2 >= 0 && x2 < w && y2 >= 0 && y2 < h) {
+                    // interpolate
+                    float valCur = tex2D(texGrayCur, x2, y2);
+                    residual = d_ptrGrayRef[idx] - valCur;
+                }
+            }
+        }
+        d_residuals[idx] = residual;
+    }
+}
+
+
 void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
                          const cv::Mat &grayCur, const cv::Mat &depthCur,
                          const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
@@ -362,63 +424,60 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     float fy = K(1, 1);
     float cx = K(0, 2);
     float cy = K(1, 2);
-    float fxInv = 1.0f / fx;
-    float fyInv = 1.0f / fy;
 
     // convert SE3 to rotation matrix and translation vector
     Eigen::Matrix3f rotMat;
     Eigen::Vector3f t;
     convertSE3ToTf(xi, rotMat, t);
 
-    const float* ptrGrayRef = (const float*)grayRef.data;
-    const float* ptrDepthRef = (const float*)depthRef.data;
-    const float* ptrGrayCur = (const float*)grayCur.data;
-    const float* ptrDepthCur = (const float*)depthCur.data;
 
-    for (size_t y = 0; y < h; ++y)
-    {
-        for (size_t x = 0; x < w; ++x)
-        {
-            size_t off = y*w + x;
-            float residual = 0.0f;
+    float* d_ptrGrayRef;
+    cudaMalloc(&d_ptrGrayRef, w*h*sizeof(float));
+    cudaMemcpy(d_ptrGrayRef, (const float*)grayRef.data, w*h*sizeof(float), cudaMemcpyHostToDevice);
 
-            // project 2d point back into 3d using its depth
-            float dRef = ptrDepthRef[y*w + x];
-            if (dRef > 0.0)
-            {
-                float x0 = (static_cast<float>(x) - cx) * fxInv;
-                float y0 = (static_cast<float>(y) - cy) * fyInv;
-                float scale = 1.0f;
-                //scale = std::sqrt(x0*x0 + y0*y0 + 1.0f);
-                dRef = dRef * scale;
-                x0 = x0 * dRef;
-                y0 = y0 * dRef;
+    float* d_ptrDepthRef;
+    cudaMalloc(&d_ptrDepthRef, w*h*sizeof(float));
+    cudaMemcpy(d_ptrDepthRef, (const float*)depthRef.data, w*h*sizeof(float), cudaMemcpyHostToDevice);
 
-                // transform reference 3d point into current frame
-                // reference 3d point
-                Eigen::Vector3f pt3Ref(x0, y0, dRef);
-                Eigen::Vector3f pt3Cur = rotMat * pt3Ref + t;
-                if (pt3Cur[2] > 0.0f)
-                {
-                    // project 3d point to 2d
-                    Eigen::Vector3f pt2CurH = K * pt3Cur;
-                    float ptZinv = 1.0f / pt2CurH[2];
-                    float px = pt2CurH[0] * ptZinv;
-                    float py = pt2CurH[1] * ptZinv;
+    float* d_ptrGrayCur;
+    cudaMalloc(&d_ptrGrayCur, w*h*sizeof(float));
+    cudaMemcpy(d_ptrGrayCur, (const float*)grayCur.data, w*h*sizeof(float), cudaMemcpyHostToDevice);
 
-                    // interpolate residual
-                    float valCur = interpolate(ptrGrayCur, px, py, w, h);
-                    if (!std::isnan(valCur))
-                    {
-                        float valRef = ptrGrayRef[off];
-                        float valDiff = valRef - valCur;
-                        residual = valDiff;
-                    }
-                }
-            }
-            residuals[off] = residual;
-        }
-    }
+    texGrayCur.addressMode[0] = cudaAddressModeClamp;
+    texGrayCur.addressMode[1] = cudaAddressModeClamp;
+    texGrayCur.filterMode = cudaFilterModeLinear;
+    texGrayCur.normalized = false;
+    cudaChannelFormatDesc desc = cudaCreateChannelDesc<float>();
+
+    cudaBindTexture2D(NULL, &texGrayCur, d_ptrGrayCur, &desc, w, h, w * sizeof(d_ptrGrayCur[0]));
+
+    float* d_ptrRotation;
+    cudaMalloc(&d_ptrRotation, 9*sizeof(float));
+    cudaMemcpy(d_ptrRotation, rotMat.data(), 9*sizeof(float), cudaMemcpyHostToDevice);
+
+    float* d_ptrTranslation;
+    cudaMalloc(&d_ptrTranslation, 3*sizeof(float));
+    cudaMemcpy(d_ptrTranslation, t.data(), 3*sizeof(float), cudaMemcpyHostToDevice);
+
+    float* d_residuals;
+    cudaMalloc(&d_residuals, w*h*sizeof(float));
+
+    dim3 block = dim3(32,8,1);
+    dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
+
+    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrRotation,
+                                d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
+    cudaDeviceSynchronize();
+
+
+    cudaMemcpy(residuals, d_residuals, w*h*sizeof(float), cudaMemcpyDeviceToHost);
+    cudaFree(d_ptrGrayRef);
+    cudaFree(d_ptrDepthRef);
+    cudaFree(d_ptrRotation);
+    cudaFree(d_ptrTranslation);
+    cudaFree(d_residuals);
+    cudaUnbindTexture(texGrayCur);
+    cudaFree(d_ptrGrayCur);
 }
 
 
@@ -724,16 +783,16 @@ void DVO::align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<c
             deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, residuals_[lvl], J_[lvl]);
 #endif
 
-#if 0
+#if 1
             // compute and show error image
             cv::Mat errorImage;
-            calculateErrorImage(residuals_[level], grayRef.cols, grayRef.rows, errorImage);
+            calculateErrorImage(residuals_[lvl], grayRef.cols, grayRef.rows, errorImage);
             std::stringstream ss;
-            ss << dataFolder << "residuals_" << level << "_";
+            ss << "residuals_" << lvl << "_";
             ss << std::setw(2) << std::setfill('0') << itr << ".png";
             cv::imwrite(ss.str(), errorImage);
             cv::imshow("error", errorImage);
-            cv::waitKey(100);
+            cv::waitKey(0);
 #endif
 
             // calculate error
