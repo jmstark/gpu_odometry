@@ -38,7 +38,8 @@ ADD_DEFINITIONS(-DDVO_SOURCE_DIR=${PROJECT_SOURCE_DIR})
 # applications
 FILE(GLOB incs "src/*.hpp")
 FILE(GLOB srcs "src/*.cpp")
+FILE(GLOB srccu "src/*.cu")
 
-CUDA_ADD_EXECUTABLE(dvo_cpu ${incs} ${srcs} )
-TARGET_LINK_LIBRARIES(dvo_cpu ${OpenCV_LIBS})
+CUDA_ADD_EXECUTABLE(dvo_cu ${incs} ${srcs} ${srccu})
+TARGET_LINK_LIBRARIES(dvo_cu ${OpenCV_LIBS})
 
