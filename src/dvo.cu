@@ -1,5 +1,6 @@
 // Copyright 2016 Robert Maier, Technical University Munich
 #include "dvo.hpp"
+#include "helper.h"
 
 #include <iostream>
 #include <sstream>
@@ -129,8 +130,53 @@ void DVO::convertTfToSE3(const Eigen::Matrix4f &pose, Vec6f &xi)
 }
 
 
+__global__ void downsampleGrayKernel(float* out, int w, int h, float* in)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+    int wDown = w/2;
+    int hDown = h/2;
+	//Do bounds check
+	if(x<wDown && y<hDown && z<1)
+	{
+        float sum = 0.0f;
+        sum += in[2*y * w + 2*x] * 0.25f;
+        sum += in[2*y * w + 2*x+1] * 0.25f;
+        sum += in[(2*y+1) * w + 2*x] * 0.25f;
+        sum += in[(2*y+1) * w + 2*x+1] * 0.25f;
+        out[y*wDown + x] = sum;
+	}
+}
+
 cv::Mat DVO::downsampleGray(const cv::Mat &gray)
 {
+	float * d_in, * d_out, * h_out;
+    int w = gray.cols;
+    int h = gray.rows;
+    int wDown = w/2;
+    int hDown = h/2;
+    cudaMalloc(&d_in,w*h*sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_in,gray.data,w*h*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+    cudaMalloc(&d_out,wDown*hDown*sizeof(float)); CUDA_CHECK;
+
+    dim3 block = dim3(64,8,1);
+    dim3 grid = dim3((w+block.x-1) / block.x,
+		(h+block.y - 1) / block.y,
+		1);
+    downsampleGrayKernel<<<grid,block>>>(d_out, w, h, d_in);
+    cudaDeviceSynchronize();
+
+    cv::Mat grayDown = cv::Mat::zeros(hDown, wDown, gray.type());
+    float* ptrOut = (float*)grayDown.data;
+
+    cudaMemcpy(ptrOut,d_out,wDown*hDown*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
+    cudaFree(d_out);
+    cudaFree(d_in);
+    return grayDown;
+
+/*
     const float* ptrIn = (const float*)gray.data;
     int w = gray.cols;
     int h = gray.rows;
@@ -153,6 +199,7 @@ cv::Mat DVO::downsampleGray(const cv::Mat &gray)
     }
 
     return grayDown;
+    */
 }
 
 
