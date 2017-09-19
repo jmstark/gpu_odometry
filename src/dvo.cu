@@ -203,8 +203,88 @@ cv::Mat DVO::downsampleGray(const cv::Mat &gray)
 }
 
 
+__global__ void downsampleDepthKernel(float* out, int w, int h, float* in)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+    int wDown = w/2;
+    int hDown = h/2;
+	//Do bounds check
+	if(x<wDown && y<hDown && z<1)
+	{
+         float d0 = in[2*y * w + 2*x];
+         float d1 = in[2*y * w + 2*x+1];
+         float d2 = in[(2*y+1) * w + 2*x];
+         float d3 = in[(2*y+1) * w + 2*x+1];
+
+         int cnt = 0;
+         float sum = 0.0f;
+         if (d0 != 0.0f)
+         {
+             sum += 1.0f / d0;
+             ++cnt;
+         }
+         if (d1 != 0.0f)
+         {
+             sum += 1.0f / d1;
+             ++cnt;
+         }
+         if (d2 != 0.0f)
+         {
+             sum += 1.0f / d2;
+             ++cnt;
+         }
+         if (d3 != 0.0f)
+         {
+             sum += 1.0f / d3;
+             ++cnt;
+         }
+
+         if (cnt > 0)
+         {
+             float dInv = sum / float(cnt);
+             if (dInv != 0.0f)
+             {
+                 out[y*wDown + x] = 1.0f / dInv;
+                 return;
+             }
+         }
+         //if we did not enter the inner if-block
+         out[y*wDown + x] = 0.0f;
+	}
+}
+
+
 cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
 {
+
+	float * d_in, * d_out, * h_out;
+    int w = depth.cols;
+    int h = depth.rows;
+    int wDown = w/2;
+    int hDown = h/2;
+    cudaMalloc(&d_in,w*h*sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_in,depth.data,w*h*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+    cudaMalloc(&d_out,wDown*hDown*sizeof(float)); CUDA_CHECK;
+
+    dim3 block = dim3(64,8,1);
+    dim3 grid = dim3((w+block.x-1) / block.x,
+		(h+block.y - 1) / block.y,
+		1);
+    downsampleDepthKernel<<<grid,block>>>(d_out, w, h, d_in);
+    cudaDeviceSynchronize();
+
+
+    cv::Mat depthDown = cv::Mat::zeros(hDown, wDown, depth.type());
+    float* ptrOut = (float*)depthDown.data;
+    cudaMemcpy(ptrOut,d_out,wDown*hDown*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
+    cudaFree(d_out);
+    cudaFree(d_in);
+    return depthDown;
+
+/*
     const float* ptrIn = (const float*)depth.data;
     int w = depth.cols;
     int h = depth.rows;
@@ -256,6 +336,7 @@ cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
     }
 
     return depthDown;
+*/
 }
 
 
