@@ -550,7 +550,7 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     }
 }
 
-
+/*
 void DVO::calculateMeanStdDev(const float* residuals, float &mean, float &stdDev, int n)
 {
     float meanVal = 0.0f;
@@ -595,7 +595,75 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
         weights[i] = w;
     }
 }
+*/
 
+
+
+__global__ void computeWeightsKernel(float* weights, float* residuals, int n, float k)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	//Do bounds check
+	if(i<n && y < 1 && z < 1)
+	{
+		//compute robust Huber weights
+        float w;
+        if (std::abs(residuals[i]) <= k)
+            w = 1.0f;
+        else
+            w = k / std::abs(residuals[i]);
+        weights[i] = w;
+	}
+}
+
+void DVO::computeWeights(const float* residuals, float* weights, int n)
+{
+#if 0
+    // no weighting
+    for (int i = 0; i < n; ++i)
+        weights[i] = 1.0f;
+#if 0
+    // squared residuals
+    for (int i = 0; i < n; ++i)
+        residuals[i] = residuals[i] * residuals[i];
+    return;
+#endif
+#endif
+
+    // compute mean and standard deviation
+    float mean, stdDev;
+    float meanVal = 0.0f;
+    for (int i = 0; i < n; ++i)
+        meanVal += residuals[i];
+    mean = meanVal / static_cast<float>(n);
+
+    float variance = 0.0f;
+    for (int i = 0; i < n; ++i)
+        variance += (residuals[i] - mean) * (residuals[i] - mean);
+    stdDev = std::sqrt(variance);
+
+    float k = 1.345f * stdDev;
+
+	float * d_weights, * d_residuals;
+	cudaMalloc(&d_weights,n*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_weights,weights,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+	cudaMalloc(&d_residuals,n*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_residuals,residuals,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+
+    dim3 block = dim3(512,1,1);
+    dim3 grid = dim3((n+block.x-1) / block.x,
+		1,
+		1);
+    computeWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
+    cudaDeviceSynchronize(); CUDA_CHECK;
+
+	cudaMemcpy(weights,d_weights,n*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
+	cudaFree(d_weights); CUDA_CHECK;
+	cudaFree(d_residuals); CUDA_CHECK;
+}
 
 __global__ void applyWeightsKernel(const float* weights, float* residuals, int n)
 {
