@@ -166,14 +166,14 @@ cv::Mat DVO::downsampleGray(const cv::Mat &gray)
 		(h+block.y - 1) / block.y,
 		1);
     downsampleGrayKernel<<<grid,block>>>(d_out, w, h, d_in);
-    cudaDeviceSynchronize();
+    cudaDeviceSynchronize(); CUDA_CHECK;
 
     cv::Mat grayDown = cv::Mat::zeros(hDown, wDown, gray.type());
     float* ptrOut = (float*)grayDown.data;
 
     cudaMemcpy(ptrOut,d_out,wDown*hDown*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
-    cudaFree(d_out);
-    cudaFree(d_in);
+    cudaFree(d_out); CUDA_CHECK;
+    cudaFree(d_in); CUDA_CHECK;
     return grayDown;
 
 /*
@@ -274,14 +274,14 @@ cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
 		(h+block.y - 1) / block.y,
 		1);
     downsampleDepthKernel<<<grid,block>>>(d_out, w, h, d_in);
-    cudaDeviceSynchronize();
+    cudaDeviceSynchronize(); CUDA_CHECK;
 
 
     cv::Mat depthDown = cv::Mat::zeros(hDown, wDown, depth.type());
     float* ptrOut = (float*)depthDown.data;
     cudaMemcpy(ptrOut,d_out,wDown*hDown*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
-    cudaFree(d_out);
-    cudaFree(d_in);
+    cudaFree(d_out); CUDA_CHECK;
+    cudaFree(d_in); CUDA_CHECK;
     return depthDown;
 
 /*
@@ -597,13 +597,47 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
 }
 
 
+__global__ void applyWeightsKernel(const float* weights, float* residuals, int n)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	//Do bounds check
+	if(i<n && y < 1 && z < 1)
+	{
+		residuals[i] = residuals[i] * weights[i];
+	}
+}
+
+
 void DVO::applyWeights(const float* weights, float* residuals, int n)
 {
+	float * d_weights, * d_residuals;
+	cudaMalloc(&d_weights,n*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_weights,weights,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+	cudaMalloc(&d_residuals,n*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_residuals,residuals,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+
+    dim3 block = dim3(512,1,1);
+    dim3 grid = dim3((n+block.x-1) / block.x,
+		1,
+		1);
+    applyWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n);
+    cudaDeviceSynchronize(); CUDA_CHECK;
+
+	cudaMemcpy(residuals,d_residuals,n*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
+	cudaFree(d_weights); CUDA_CHECK;
+	cudaFree(d_residuals); CUDA_CHECK;
+
+	/*
     for (size_t i = 0; i < n; ++i)
     {
         // weight residual
         residuals[i] = residuals[i] * weights[i];
     }
+    */
 }
 
 
