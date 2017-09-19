@@ -17,6 +17,7 @@
 #define HELPER_H
 
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 #include <ctime>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>

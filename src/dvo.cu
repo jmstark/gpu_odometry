@@ -599,7 +599,7 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
 
 
 
-__global__ void computeWeightsKernel(float* weights, float* residuals, int n, float k)
+__global__ void computeHuberWeightsKernel(float* weights, float* residuals, int n, float k)
 {
 	//Compute index
 	int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -633,11 +633,32 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
 #endif
 #endif
 
+    cudaError_t cudaStat;
+    cublasStatus_t stat;
+    cublasHandle_t handle;
+    stat = cublasCreate(&handle);
+    if (stat != CUBLAS_STATUS_SUCCESS)
+    {
+    	std::cerr<< "CUBLAS initialization failed"<<std::endl;
+    	return;
+    }
+    std::cerr<< "CUBLAS initialization successful"<<std::endl;
+
+
+	float * d_weights, * d_residuals;
+	cudaMalloc(&d_weights,n*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_weights,weights,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+	cudaMalloc(&d_residuals,n*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_residuals,residuals,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+
+
+
     // compute mean and standard deviation
     float mean, stdDev;
     float meanVal = 0.0f;
-    for (int i = 0; i < n; ++i)
-        meanVal += residuals[i];
+	cublasSasum (handle, n, d_residuals, 1, &meanVal);
+    //for (int i = 0; i < n; ++i)
+    //    meanVal += residuals[i];
     mean = meanVal / static_cast<float>(n);
 
     float variance = 0.0f;
@@ -647,17 +668,11 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
 
     float k = 1.345f * stdDev;
 
-	float * d_weights, * d_residuals;
-	cudaMalloc(&d_weights,n*sizeof(float)); CUDA_CHECK;
-	cudaMemcpy(d_weights,weights,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
-	cudaMalloc(&d_residuals,n*sizeof(float)); CUDA_CHECK;
-	cudaMemcpy(d_residuals,residuals,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
-
     dim3 block = dim3(512,1,1);
     dim3 grid = dim3((n+block.x-1) / block.x,
 		1,
 		1);
-    computeWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
+    computeHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
     cudaDeviceSynchronize(); CUDA_CHECK;
 
 	cudaMemcpy(weights,d_weights,n*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;

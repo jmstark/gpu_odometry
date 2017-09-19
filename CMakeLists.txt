@@ -42,3 +42,5 @@ FILE(GLOB srcscu "src/*.cu")
 
 CUDA_ADD_EXECUTABLE(dvo_gpu ${incs} ${srcs} ${srcscu})
 TARGET_LINK_LIBRARIES(dvo_gpu ${OpenCV_LIBS})
+
+CUDA_ADD_CUBLAS_TO_TARGET( dvo_gpu )
