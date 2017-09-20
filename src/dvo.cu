@@ -6,12 +6,33 @@
 #include <sstream>
 #include <string>
 #include <iomanip>
+#include <stdio.h>
+#include <ctime>
+
 
 #include <Eigen/Cholesky>
 #include <sophus/se3.hpp>
 
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/highgui/highgui.hpp>
+
+
+#define CUDA_CHECK cuda_check(__FILE__,__LINE__)
+// cuda error checking
+std::string prev_file = "";
+int prev_line = 0;
+void cuda_check(std::string file, int line)
+{
+    cudaError_t e = cudaGetLastError();
+    if (e != cudaSuccess)
+    {
+        std::cout << std::endl << file << ", line " << line << ": " << cudaGetErrorString(e) << " (" << e << ")" << std::endl;
+        if (prev_line>0) std::cout << "Previous CUDA call:" << std::endl << prev_file << ", line " << prev_line << std::endl;
+        exit(1);
+    }
+    prev_file = file;
+    prev_line = line;
+}
 
 
 DVO::DVO() :
@@ -681,6 +702,203 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validR
     }
 }
 
+__device__ float interpolate_gpu( const float* ptrImgIntensity, float x, float y, int w, int h)
+{
+	float valCur = 1.1f;
+
+#if 0
+    // direct lookup, no interpolation
+    int x0 = static_cast<int>(x + 0.5f);
+    int y0 = static_cast<int>(y + 0.5f);
+    if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h)
+        valCur = ptrImgIntensity[y0*w + x0];
+#else
+    //bilinear interpolation
+    int x0 = static_cast<int>(x);
+    int y0 = static_cast<int>(y);
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+
+    float x1_weight = x - static_cast<float>(x0);
+    float y1_weight = y - static_cast<float>(y0);
+    float x0_weight = 1.0f - x1_weight;
+    float y0_weight = 1.0f - y1_weight;
+
+    if (x0 < 0 || x0 >= w)
+        x0_weight = 0.0f;
+    if (x1 < 0 || x1 >= w)
+        x1_weight = 0.0f;
+    if (y0 < 0 || y0 >= h)
+        y0_weight = 0.0f;
+    if (y1 < 0 || y1 >= h)
+        y1_weight = 0.0f;
+    float w00 = x0_weight * y0_weight;
+    float w10 = x1_weight * y0_weight;
+    float w01 = x0_weight * y1_weight;
+    float w11 = x1_weight * y1_weight;
+
+    float sumWeights = w00 + w10 + w01 + w11;
+    float sum = 0.0f;
+    if (w00 > 0.0f)
+        sum += ptrImgIntensity[y0*w + x0] * w00;
+    if (w01 > 0.0f)
+        sum += ptrImgIntensity[y1*w + x0] * w01;
+    if (w10 > 0.0f)
+        sum += ptrImgIntensity[y0*w + x1] * w10;
+    if (w11 > 0.0f)
+        sum += ptrImgIntensity[y1*w + x1] * w11;
+
+    if (sumWeights > 0.0f)
+        valCur = sum / sumWeights;
+#endif
+
+    return valCur;
+}
+
+void matToInterleaved(float *a,const Eigen::Matrix3f &m)
+{
+	for(int i=0;i<3;i++)
+	{
+		for(int j=0;j<3;j++)
+		{
+			a[i+3*j] = m(i,j);
+		}
+	}
+}
+
+void vectorToInterleaved(float *a,const Eigen::Vector3f &v)
+{
+	for(int i=0;i<3;i++)
+	{
+		a[i] = v(i);
+	}
+}
+
+__device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
+{
+	for(int i = 0;i<3;i++)
+	{
+		float sum = 0.f;
+		for(int j = 0;j<3;j++)
+		{
+			sum += rot[i+3*j]*v[j];
+		}
+		res[i] = sum + t[i];
+	}
+
+}
+
+__device__ void multiply(float *mat,float *v,float *res)
+{
+	for(int i = 0;i<3;i++)
+	{
+		float sum = 0.f;
+		for(int j = 0;j<3;j++)
+		{
+			sum += mat[i+3*j]*v[j];
+		}
+		res[i] = sum;
+	}
+
+}
+
+__global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float * d_rotMat, float* d_t,
+		float *d_gradx,float *d_grady,int w, int h,float *d_J)
+{
+
+	int x = threadIdx.x + blockDim.x*blockIdx.x;
+	int y = threadIdx.y + blockDim.y*blockIdx.y;
+
+		
+	if(x<w && y<h)
+	{
+		size_t idx = x + (size_t)w*y;
+
+		float residualRowJ[6];
+
+		// camera intrinsics
+		//float fx = K(0, 0);
+		float fx = d_K[0]; // Using d_K[i+3j] = k(i,j)
+		//float fy = K(1, 1);
+		float fy = d_K[4];
+		//float cx = K(0, 2);
+		float cx = d_K[6];
+		//float cy = K(1, 2);
+		float cy = d_K[7];
+		
+		float fxInv = 1.0f / fx;
+		float fyInv = 1.0f / fy;
+
+        // project 2d point back into 3d using its depth
+        float dRef = d_ptrDepthRef[idx];
+        if (dRef > 0.0f)
+        {
+            float x0 = (static_cast<float>(x) - cx) * fxInv;
+            float y0 = (static_cast<float>(y) - cy) * fyInv;
+            float scale = 1.0f;
+            //scale = std::sqrt(x0*x0 + y0*y0 + 1.0);
+            dRef = dRef * scale;
+            x0 = x0 * dRef;
+            y0 = y0 * dRef;
+
+            // transform reference 3d point into current frame
+            // reference 3d point
+            // Eigen::Vector3f pt3Ref(x0, y0, dRef);
+            float pt3Ref[3] = {x0,y0,dRef};
+            float pt3[3];
+           
+            rotateAndTranslate(d_rotMat,d_t,pt3Ref,pt3);
+            
+            if (pt3[2] > 0.0f)
+            {
+            
+                // project 3d point to 2d
+                float pt2CurH[3];
+                multiply(d_K,pt3,pt2CurH);
+            	//Eigen::Vector3f pt2CurH = K * pt3;
+               
+                float ptZinv = 1.0f / pt2CurH[2];
+                float px = pt2CurH[0] * ptZinv;
+                float py = pt2CurH[1] * ptZinv;
+
+                // compute interpolated image gradient
+                float dX = interpolate_gpu(d_gradx, px, py, w, h);
+                float dY = interpolate_gpu(d_grady, px, py, w, h);
+               
+                if (dX<=1 && dY<=1)
+                {
+                	//printf("dx = %f dy = %f \n",dX,dY);
+                    dX = fx * dX;
+                    dY = fy * dY;
+                    float pt3Zinv = 1.0f / pt3[2];
+
+                    // shorter computation
+                    residualRowJ[0] = dX * pt3Zinv;
+                    residualRowJ[1] = dY * pt3Zinv;
+                    residualRowJ[2] = - (dX * pt3[0] + dY * pt3[1]) * pt3Zinv * pt3Zinv;
+                    residualRowJ[3] = - (dX * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv - dY * (1 + (pt3[1] * pt3Zinv) * (pt3[1] * pt3Zinv));
+                    residualRowJ[4] = + dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) + (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv;
+                    residualRowJ[5] = (- dX * pt3[1] + dY * pt3[0]) * pt3Zinv;
+                }
+            }
+        }
+		
+        // set 1x6 Jacobian row for current residual
+        // invert Jacobian according to kerl2012msc.pdf (necessary?)
+        for (int j = 0; j < 6; ++j){
+        	size_t jidx = idx*6 + j;
+        	if(jidx < w*h*6) {
+            	d_J[idx*6 + j] = - residualRowJ[j];
+            	}
+        }
+
+	}
+
+
+}
+
+
+
 
 void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
                    const cv::Mat &grayCur, const cv::Mat &depthCur,
@@ -695,12 +913,12 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     const float* ptrDepthRef = (const float*)depthRef.data;
 
     // camera intrinsics
-    float fx = K(0, 0);
-    float fy = K(1, 1);
-    float cx = K(0, 2);
-    float cy = K(1, 2);
-    float fxInv = 1.0f / fx;
-    float fyInv = 1.0f / fy;
+    //float fx = K(0, 0);
+    //float fy = K(1, 1);
+   // float cx = K(0, 2);
+    //float cy = K(1, 2);
+    //float fxInv = 1.0f / fx;
+    //float fyInv = 1.0f / fy;
 
     // convert SE3 to rotation matrix and translation vector
     Eigen::Matrix3f rotMat;
@@ -714,64 +932,57 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     const float* ptrGradX = (const float*)gradX.data;
     const float* ptrGradY = (const float*)gradY.data;
 
-    // create and fill Jacobian row by row
-    float residualRowJ[6];
-    for (size_t y = 0; y < h; ++y)
-    {
-        for (size_t x = 0; x < w; ++x)
-        {
-            size_t off = y*w + x;
+    // Using multi threading
+    dim3 block =  dim3(32,32,1);
+    dim3 grid = dim3((w+block.x-1)/block.x,(h+block.y-1)/block.y,1);
 
-            // project 2d point back into 3d using its depth
-            float dRef = ptrDepthRef[y*w + x];
-            if (dRef > 0.0f)
-            {
-                float x0 = (static_cast<float>(x) - cx) * fxInv;
-                float y0 = (static_cast<float>(y) - cy) * fyInv;
-                float scale = 1.0f;
-                //scale = std::sqrt(x0*x0 + y0*y0 + 1.0);
-                dRef = dRef * scale;
-                x0 = x0 * dRef;
-                y0 = y0 * dRef;
 
-                // transform reference 3d point into current frame
-                // reference 3d point
-                Eigen::Vector3f pt3Ref(x0, y0, dRef);
-                Eigen::Vector3f pt3 = rotMat * pt3Ref + t;
-                if (pt3[2] > 0.0f)
-                {
-                    // project 3d point to 2d
-                    Eigen::Vector3f pt2CurH = K * pt3;
-                    float ptZinv = 1.0f / pt2CurH[2];
-                    float px = pt2CurH[0] * ptZinv;
-                    float py = pt2CurH[1] * ptZinv;
 
-                    // compute interpolated image gradient
-                    float dX = interpolate(ptrGradX, px, py, w, h);
-                    float dY = interpolate(ptrGradY, px, py, w, h);
-                    if (!std::isnan(dX) && !std::isnan(dY))
-                    {
-                        dX = fx * dX;
-                        dY = fy * dY;
-                        float pt3Zinv = 1.0f / pt3[2];
+    // Converting from Matrix and Vector to float
+    float h_tr[3];
+    float h_rot[9];
+    float h_K[9];
 
-                        // shorter computation
-                        residualRowJ[0] = dX * pt3Zinv;
-                        residualRowJ[1] = dY * pt3Zinv;
-                        residualRowJ[2] = - (dX * pt3[0] + dY * pt3[1]) * pt3Zinv * pt3Zinv;
-                        residualRowJ[3] = - (dX * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv - dY * (1 + (pt3[1] * pt3Zinv) * (pt3[1] * pt3Zinv));
-                        residualRowJ[4] = + dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) + (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv;
-                        residualRowJ[5] = (- dX * pt3[1] + dY * pt3[0]) * pt3Zinv;
-                    }
-                }
-            }
+    vectorToInterleaved(h_tr,t);
+    matToInterleaved(h_rot,rotMat);
+    matToInterleaved(h_K,K);
 
-            // set 1x6 Jacobian row for current residual
-            // invert Jacobian according to kerl2012msc.pdf (necessary?)
-            for (int j = 0; j < 6; ++j)
-                J[off*6 + j] = - residualRowJ[j];
-        }
-    }
+    // Allocating device memory
+    float *d_ptrDepthRef,*d_J,*d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
+
+
+    cudaMalloc(&d_J,6*n*sizeof(float));CUDA_CHECK;
+    cudaMalloc(&d_ptrDepthRef,w*h*sizeof(float));CUDA_CHECK;
+    cudaMalloc(&d_gradx,w*h*sizeof(float));CUDA_CHECK;
+    cudaMalloc(&d_grady,w*h*sizeof(float));CUDA_CHECK;
+    cudaMalloc(&d_rotMat,9*sizeof(float));CUDA_CHECK;
+    cudaMalloc(&d_K,9*sizeof(float));CUDA_CHECK;
+    cudaMalloc(&d_t,3*sizeof(float));CUDA_CHECK;
+
+
+    cudaMemcpy(d_ptrDepthRef,ptrDepthRef,w*h*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_gradx,ptrGradX,w*h*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_grady,ptrGradY,w*h*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_rotMat,h_rot,9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_K,h_K,9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpy(d_t,h_tr,3*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+
+   
+   
+	
+
+    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
+
+    cudaMemcpy(J,d_J,6*n*sizeof(float),cudaMemcpyDeviceToHost);CUDA_CHECK;
+
+    cudaFree(d_K);CUDA_CHECK;
+    cudaFree(d_ptrDepthRef);CUDA_CHECK;
+    cudaFree(d_rotMat);CUDA_CHECK;
+    cudaFree(d_J);CUDA_CHECK;
+    cudaFree(d_t);CUDA_CHECK;
+    cudaFree(d_gradx);CUDA_CHECK;
+    cudaFree(d_grady);CUDA_CHECK;
+
 }
 
 
