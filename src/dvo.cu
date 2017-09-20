@@ -874,73 +874,35 @@ void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int vali
 #endif
 }
 
-__global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRows, bool useWeights, int j, int k, float *d_res) {
+__global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRows, bool useWeights, float *d_res) {
 
-    int i = threadIdx.x + blockDim.x*blockIdx.x;
+    int idx = threadIdx.x + blockDim.x*blockIdx.x;
 
-    if(i < validRows) {
-    	float valSqr = d_J[i*6 + j] * d_J[i*6 + k];
-    	if (useWeights)
-    		valSqr *= d_weights[i];
-    	d_res[i] = valSqr;
+    if(idx < 36) {
+        int j = idx/6;
+        int k = idx % 6;
+        float sum = 0;
+        float valSqr;
+        for(int i = 0; i < validRows; i++) {
+    	   valSqr = d_J[i*6 + j] * d_J[i*6 + k];
+    	   if (useWeights)
+    	       valSqr *= d_weights[i];
+
+    	   sum += valSqr;
+       }
+
+        d_res[idx] = sum;
     }
-
 }
 
 
 void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validRows, bool useWeights)
 {
-
+/*
+    Timer t;
+    t.start();
     int n = 6;
     int m = validRows;
-
-    float *d_J;
-    cudaMalloc(&d_J,sizeof(float)*n*m);
-    cudaMemcpy(d_J,J,sizeof(float)*n*m,cudaMemcpyHostToDevice);
-
-    float *d_weights;
-    cudaMalloc(&d_weights,sizeof(float)*m);
-    cudaMemcpy(d_weights,weights,sizeof(float)*m,cudaMemcpyHostToDevice);
-
-	Timer t;
-	t.start();
-
-    // compute A = Jt*J
-    for (int k = 0; k < n; ++k)
-    {
-        for (int j = 0; j < n; ++j)
-        {
-
-            float *d_res;
-            cudaMalloc(&d_res,sizeof(float)*m);
-
-            dim3 block =  dim3(256,1,1);
-            dim3 grid = dim3((m+block.x-1)/block.x,1,1);
-            JtJKernel <<<grid,block>>> (d_J, d_weights, validRows, useWeights, j, k , d_res);
-            cudaDeviceSynchronize();
-
-            thrust::device_ptr<float> dp_res = thrust::device_pointer_cast(d_res);
-
-            // sum elements
-            float val = thrust::reduce(
-                dp_res,
-                dp_res+m,
-                0.0f,
-                thrust::plus<float>());
-
-            A(k,j) = val;
-            cudaFree(d_res);
-        }
-    }
-    cudaFree(d_J);
-    cudaFree(d_weights);
-
-    t.end();
-    std::cout << "GPU: " << t.get() << std::endl;
-
-    t.start();
-    n = 6;
-    m = validRows;
 
     // compute A = Jt*J
     for (int k = 0; k < n; ++k)
@@ -960,8 +922,52 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validR
     }
 
     t.end();
-    std::cout << "CPU: " << t.get() << std::endl;
 
+    std::cout << "CPU: " << t.get() << std::endl;
+*/
+    int n = 6;
+    int m = validRows;
+
+    float *d_J;
+    cudaMalloc(&d_J,sizeof(float)*n*m);
+    cudaMemcpy(d_J,J,sizeof(float)*n*m,cudaMemcpyHostToDevice);
+
+    float *d_weights;
+    cudaMalloc(&d_weights,sizeof(float)*m);
+    cudaMemcpy(d_weights,weights,sizeof(float)*m,cudaMemcpyHostToDevice);
+
+    float *res = new float[36];
+
+    float *d_res;
+    cudaMalloc(&d_res,sizeof(float)*36);
+
+    // we need 36 threads in total, for 36 matrix enties
+    dim3 block =  dim3(32,1,1);
+    dim3 grid = dim3(2,1,1);
+
+    //Timer t;
+    //t.start();
+
+    JtJKernel <<<grid,block>>> (d_J, d_weights, validRows, useWeights, d_res);
+    cudaDeviceSynchronize();
+    cudaMemcpy(res,d_res,sizeof(float)*36,cudaMemcpyDeviceToHost);
+
+    for(int k = 0; k < n; k++) {
+        for(int j = 0; j < n; j++) {
+            A(k,j) = res[k + 6*j];
+        }
+    }
+
+    //t.end();
+    //std::cout << "GPU: " << t.get() << std::endl;
+
+    cudaFree(d_J);
+    cudaFree(d_weights);
+    cudaFree(d_res);
+
+/*
+
+*/
 }
 
 void matToInterleaved(float *a,const Eigen::Matrix3f &m)
