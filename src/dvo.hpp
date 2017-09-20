@@ -50,7 +50,6 @@ private:
     void convertTfToSE3(const Eigen::Matrix4f &pose, Vec6f &xi);
 
     void computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction);
-    float interpolate(const float* ptrImgIntensity, float x, float y, int w, int h);
     float calculateError(const float* residuals, int n);
     void calculateErrorImage(const float* residuals, int w, int h, cv::Mat &errorImage);
     void calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,

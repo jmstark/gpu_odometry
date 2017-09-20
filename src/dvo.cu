@@ -314,60 +314,6 @@ void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
 }
 
 
-float DVO::interpolate(const float* ptrImgIntensity, float x, float y, int w, int h)
-{
-    float valCur = std::numeric_limits<float>::quiet_NaN();
-
-#if 0
-    // direct lookup, no interpolation
-    int x0 = static_cast<int>(x + 0.5f);
-    int y0 = static_cast<int>(y + 0.5f);
-    if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h)
-        valCur = ptrImgIntensity[y0*w + x0];
-#else
-    //bilinear interpolation
-    int x0 = static_cast<int>(x);
-    int y0 = static_cast<int>(y);
-    int x1 = x0 + 1;
-    int y1 = y0 + 1;
-
-    float x1_weight = x - static_cast<float>(x0);
-    float y1_weight = y - static_cast<float>(y0);
-    float x0_weight = 1.0f - x1_weight;
-    float y0_weight = 1.0f - y1_weight;
-
-    if (x0 < 0 || x0 >= w)
-        x0_weight = 0.0f;
-    if (x1 < 0 || x1 >= w)
-        x1_weight = 0.0f;
-    if (y0 < 0 || y0 >= h)
-        y0_weight = 0.0f;
-    if (y1 < 0 || y1 >= h)
-        y1_weight = 0.0f;
-    float w00 = x0_weight * y0_weight;
-    float w10 = x1_weight * y0_weight;
-    float w01 = x0_weight * y1_weight;
-    float w11 = x1_weight * y1_weight;
-
-    float sumWeights = w00 + w10 + w01 + w11;
-    float sum = 0.0f;
-    if (w00 > 0.0f)
-        sum += ptrImgIntensity[y0*w + x0] * w00;
-    if (w01 > 0.0f)
-        sum += ptrImgIntensity[y1*w + x0] * w01;
-    if (w10 > 0.0f)
-        sum += ptrImgIntensity[y0*w + x1] * w10;
-    if (w11 > 0.0f)
-        sum += ptrImgIntensity[y1*w + x1] * w11;
-
-    if (sumWeights > 0.0f)
-        valCur = sum / sumWeights;
-#endif
-
-    return valCur;
-}
-
-
 float DVO::calculateError(const float* residuals, int n)
 {
     float error = 0.0f;
@@ -928,7 +874,7 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                 float dX = d_interpolate(d_gradx, px, py, w, h);
                 float dY = d_interpolate(d_grady, px, py, w, h);
                
-                if (!(isnan(dX) || isnan(dY)))
+                if (!isnan(dX) && !isnan(dY))
                 {
                 	//printf("dx = %f dy = %f \n",dX,dY);
                     dX = fx * dX;
@@ -1123,7 +1069,7 @@ void DVO::align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<c
         for (int itr = 0; itr < numIterations_; ++itr)
         {
             // compute residuals and Jacobian
-#if 1
+#if 0
             deriveNumeric(grayRef, depthRef, grayCur, depthCur, xi, kLevel, residuals_[lvl], J_[lvl]);
 #else
             deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, residuals_[lvl], J_[lvl]);
