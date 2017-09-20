@@ -334,8 +334,8 @@ void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
 	cudaMalloc(&d_ptrOut,w*h*sizeof(float)); CUDA_CHECK;
 
     dim3 block = dim3(64,8,1);
-    dim3 grid = dim3((w+block.x-1) / block.x,
-		(h+block.y - 1) / block.y,
+    dim3 grid = dim3((w+1+block.x-1) / block.x,
+		(h+1+block.y - 1) / block.y,
 		1);
     computeGradientKernel<<<grid,block>>>(d_ptrOut, d_ptrIn, w, h, xStart, yStart, xEnd, yEnd, direction);
     cudaDeviceSynchronize(); CUDA_CHECK;
