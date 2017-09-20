@@ -17,7 +17,14 @@
 #define HELPER_H
 
 #include <cuda_runtime.h>
-#include <cublas_v2.h>
+
+#include <thrust/transform_reduce.h>
+#include <thrust/device_vector.h>
+#include <thrust/functional.h>
+
+#include <functional>
+#include <cmath>
+
 #include <ctime>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>

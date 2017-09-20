@@ -152,7 +152,7 @@ __global__ void downsampleGrayKernel(float* out, int w, int h, float* in)
 
 cv::Mat DVO::downsampleGray(const cv::Mat &gray)
 {
-	float * d_in, * d_out, * h_out;
+	float * d_in, * d_out;
     int w = gray.cols;
     int h = gray.rows;
     int wDown = w/2;
@@ -176,30 +176,6 @@ cv::Mat DVO::downsampleGray(const cv::Mat &gray)
     cudaFree(d_in); CUDA_CHECK;
     return grayDown;
 
-/*
-    const float* ptrIn = (const float*)gray.data;
-    int w = gray.cols;
-    int h = gray.rows;
-    int wDown = w/2;
-    int hDown = h/2;
-
-    cv::Mat grayDown = cv::Mat::zeros(hDown, wDown, gray.type());
-    float* ptrOut = (float*)grayDown.data;
-    for (size_t y = 0; y < hDown; ++y)
-    {
-        for (size_t x = 0; x < wDown; ++x)
-        {
-            float sum = 0.0f;
-            sum += ptrIn[2*y * w + 2*x] * 0.25f;
-            sum += ptrIn[2*y * w + 2*x+1] * 0.25f;
-            sum += ptrIn[(2*y+1) * w + 2*x] * 0.25f;
-            sum += ptrIn[(2*y+1) * w + 2*x+1] * 0.25f;
-            ptrOut[y*wDown + x] = sum;
-        }
-    }
-
-    return grayDown;
-    */
 }
 
 
@@ -251,7 +227,7 @@ __global__ void downsampleDepthKernel(float* out, int w, int h, float* in)
                  return;
              }
          }
-         //if we did not enter the inner if-block
+         //set pixel if we did not enter the inner if-block
          out[y*wDown + x] = 0.0f;
 	}
 }
@@ -260,7 +236,7 @@ __global__ void downsampleDepthKernel(float* out, int w, int h, float* in)
 cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
 {
 
-	float * d_in, * d_out, * h_out;
+	float * d_in, * d_out;
     int w = depth.cols;
     int h = depth.rows;
     int wDown = w/2;
@@ -284,59 +260,6 @@ cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
     cudaFree(d_in); CUDA_CHECK;
     return depthDown;
 
-/*
-    const float* ptrIn = (const float*)depth.data;
-    int w = depth.cols;
-    int h = depth.rows;
-    int wDown = w/2;
-    int hDown = h/2;
-
-    // downscaling by averaging the inverse depth
-    cv::Mat depthDown = cv::Mat::zeros(hDown, wDown, depth.type());
-    float* ptrOut = (float*)depthDown.data;
-    for (size_t y = 0; y < hDown; ++y)
-    {
-        for (size_t x = 0; x < wDown; ++x)
-        {
-            float d0 = ptrIn[2*y * w + 2*x];
-            float d1 = ptrIn[2*y * w + 2*x+1];
-            float d2 = ptrIn[(2*y+1) * w + 2*x];
-            float d3 = ptrIn[(2*y+1) * w + 2*x+1];
-
-            int cnt = 0;
-            float sum = 0.0f;
-            if (d0 != 0.0f)
-            {
-                sum += 1.0f / d0;
-                ++cnt;
-            }
-            if (d1 != 0.0f)
-            {
-                sum += 1.0f / d1;
-                ++cnt;
-            }
-            if (d2 != 0.0f)
-            {
-                sum += 1.0f / d2;
-                ++cnt;
-            }
-            if (d3 != 0.0f)
-            {
-                sum += 1.0f / d3;
-                ++cnt;
-            }
-
-            if (cnt > 0)
-            {
-                float dInv = sum / float(cnt);
-                if (dInv != 0.0f)
-                    ptrOut[y*wDown + x] = 1.0f / dInv;
-            }
-        }
-    }
-
-    return depthDown;
-*/
 }
 
 
@@ -550,53 +473,6 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     }
 }
 
-/*
-void DVO::calculateMeanStdDev(const float* residuals, float &mean, float &stdDev, int n)
-{
-    float meanVal = 0.0f;
-    for (int i = 0; i < n; ++i)
-        meanVal += residuals[i];
-    mean = meanVal / static_cast<float>(n);
-
-    float variance = 0.0f;
-    for (int i = 0; i < n; ++i)
-        variance += (residuals[i] - mean) * (residuals[i] - mean);
-    stdDev = std::sqrt(variance);
-}
-
-
-void DVO::computeWeights(const float* residuals, float* weights, int n)
-{
-#if 0
-    // no weighting
-    for (int i = 0; i < n; ++i)
-        weights[i] = 1.0f;
-#if 0
-    // squared residuals
-    for (int i = 0; i < n; ++i)
-        residuals[i] = residuals[i] * residuals[i];
-    return;
-#endif
-#endif
-
-    // compute mean and standard deviation
-    float mean, stdDev;
-    calculateMeanStdDev(residuals, mean, stdDev, n);
-
-    // compute robust Huber weights
-    float k = 1.345f * stdDev;
-    for (int i = 0; i < n; ++i)
-    {
-        float w;
-        if (std::abs(residuals[i]) <= k)
-            w = 1.0f;
-        else
-            w = k / std::abs(residuals[i]);
-        weights[i] = w;
-    }
-}
-*/
-
 
 
 __global__ void computeHuberWeightsKernel(float* weights, float* residuals, int n, float k)
@@ -619,6 +495,25 @@ __global__ void computeHuberWeightsKernel(float* weights, float* residuals, int 
 	}
 }
 
+
+
+struct varianceshifteop
+    : std::unary_function<float, float>
+{
+    varianceshifteop(float m)
+        : mean(m)
+    { /* no-op */ }
+
+    const float mean;
+
+    __device__ float operator()(float data) const
+    {
+    	return (data-mean)*(data-mean);
+    }
+};
+
+
+
 void DVO::computeWeights(const float* residuals, float* weights, int n)
 {
 #if 0
@@ -633,17 +528,6 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
 #endif
 #endif
 
-    cudaError_t cudaStat;
-    cublasStatus_t stat;
-    cublasHandle_t handle;
-    stat = cublasCreate(&handle);
-    if (stat != CUBLAS_STATUS_SUCCESS)
-    {
-    	std::cerr<< "CUBLAS initialization failed"<<std::endl;
-    	return;
-    }
-    std::cerr<< "CUBLAS initialization successful"<<std::endl;
-
 
 	float * d_weights, * d_residuals;
 	cudaMalloc(&d_weights,n*sizeof(float)); CUDA_CHECK;
@@ -651,19 +535,27 @@ void DVO::computeWeights(const float* residuals, float* weights, int n)
 	cudaMalloc(&d_residuals,n*sizeof(float)); CUDA_CHECK;
 	cudaMemcpy(d_residuals,residuals,n*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
 
-
-
-    // compute mean and standard deviation
     float mean, stdDev;
-    float meanVal = 0.0f;
-	cublasSasum (handle, n, d_residuals, 1, &meanVal);
-    //for (int i = 0; i < n; ++i)
-    //    meanVal += residuals[i];
-    mean = meanVal / static_cast<float>(n);
 
-    float variance = 0.0f;
-    for (int i = 0; i < n; ++i)
-        variance += (residuals[i] - mean) * (residuals[i] - mean);
+    // wrap raw pointer with a device_ptr
+    thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
+
+    // sum elements and divide by the number of elements
+    mean = thrust::reduce(
+        dp_residuals,
+        dp_residuals+n,
+        0.0f,
+        thrust::plus<float>()) / n;
+
+    // shift elements by mean, square, and add them
+    float variance = thrust::transform_reduce(
+    		dp_residuals,
+    		dp_residuals+n,
+            varianceshifteop(mean),
+            0.0f,
+            thrust::plus<float>());
+
+    // standard dev is just a sqrt away
     stdDev = std::sqrt(variance);
 
     float k = 1.345f * stdDev;
@@ -714,13 +606,6 @@ void DVO::applyWeights(const float* weights, float* residuals, int n)
 	cudaFree(d_weights); CUDA_CHECK;
 	cudaFree(d_residuals); CUDA_CHECK;
 
-	/*
-    for (size_t i = 0; i < n; ++i)
-    {
-        // weight residual
-        residuals[i] = residuals[i] * weights[i];
-    }
-    */
 }
 
 
