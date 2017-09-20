@@ -495,6 +495,12 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     Eigen::Vector3f t;
     convertSE3ToTf(xi, rotMat, t);
 
+    /* ## for GpuMat use
+    float* d_ptrGrayRef = (const float*)grayRef.data;
+    float* d_ptrDepthRef = (const float*)depthRef.data;
+    float* d_ptrGrayCur = (const float*)grayCur.data;
+    float* d_ptrDepthCur = (const float*)depthCur.data;
+    */
 
     float* d_ptrGrayRef;
     cudaMalloc(&d_ptrGrayRef, w*h*sizeof(float));
