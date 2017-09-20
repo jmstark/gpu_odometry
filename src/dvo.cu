@@ -757,8 +757,88 @@ void DVO::deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
 }
 
 
+__global__ void computeJtRIntermediateResultKernel(float* out, const float* J, const float* residuals, int m, int j)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	if(i<m && y < 1 && z < 1)
+	{
+		out[i] = J[i*6 + j] * residuals[i];
+	}
+}
+
+
+
 void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int validRows)
 {
+/*    float mean, stdDev;
+
+    // wrap raw pointer with a device_ptr
+    thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
+
+    // sum elements and divide by the number of elements
+    mean = thrust::reduce(
+        dp_residuals,
+        dp_residuals+n,
+        0.0f,
+        thrust::plus<float>()) / n;
+
+    // shift elements by mean, square, and add them
+    float variance = thrust::transform_reduce(
+    		dp_residuals,
+    		dp_residuals+n,
+            varianceshifteop(mean),
+            0.0f,
+            thrust::plus<float>());
+*/
+#if 1
+    int n = 6;
+    int m = validRows;
+
+    float * d_J, * d_residuals, * d_intermediate;
+    cudaMalloc(&d_intermediate, m * sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_residuals, m * sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_residuals, residuals, m * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_J, m*6*sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_J, J, m*6*sizeof(float), cudaMemcpyHostToDevice); CUDA_CHECK;
+
+	dim3 block = dim3(128,1,1);
+	dim3 grid = dim3((m+block.x-1) / block.x,
+		1,
+		1);
+
+    // compute b = Jt*r
+    for (int j = 0; j < n; ++j)
+    {
+        //for (int i = 0; i < m; ++i)
+            //val += J[i*6 + j] * residuals[i];
+    	//this loop is replaced by the following GPU code:
+    	//first element-wise multiplication into temporary memory, then summation over that.
+
+    	computeJtRIntermediateResultKernel<<<grid,block>>>(d_intermediate, d_J, d_residuals, m, j);
+    	cudaDeviceSynchronize(); CUDA_CHECK;
+
+        // wrap raw pointer with a device_ptr
+        thrust::device_ptr<float> dp_intermediate = thrust::device_pointer_cast(d_intermediate);
+
+        // sum elements
+        float val = thrust::reduce(
+            dp_intermediate,
+            dp_intermediate+m,
+            0.0f,
+            thrust::plus<float>());
+
+        b[j] = val;
+    }
+
+    cudaFree(d_J); CUDA_CHECK;
+    cudaFree(d_residuals); CUDA_CHECK;
+    cudaFree(d_intermediate); CUDA_CHECK;
+
+#else
     int n = 6;
     int m = validRows;
 
@@ -770,6 +850,7 @@ void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int vali
             val += J[i*6 + j] * residuals[i];
         b[j] = val;
     }
+#endif
 }
 
 
