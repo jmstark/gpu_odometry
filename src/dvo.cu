@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <ctime>
 
+#include "helper.h"
 
 #include <Eigen/Cholesky>
 #include <sophus/se3.hpp>
@@ -17,24 +18,6 @@
 #include <opencv2/highgui/highgui.hpp>
 
 #include <cuda_runtime.h>
-
-
-#define CUDA_CHECK cuda_check(__FILE__,__LINE__)
-// cuda error checking
-std::string prev_file = "";
-int prev_line = 0;
-void cuda_check(std::string file, int line)
-{
-    cudaError_t e = cudaGetLastError();
-    if (e != cudaSuccess)
-    {
-        std::cout << std::endl << file << ", line " << line << ": " << cudaGetErrorString(e) << " (" << e << ")" << std::endl;
-        if (prev_line>0) std::cout << "Previous CUDA call:" << std::endl << prev_file << ", line " << prev_line << std::endl;
-        exit(1);
-    }
-    prev_file = file;
-    prev_line = line;
-}
 
 
 DVO::DVO() :
@@ -835,59 +818,6 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validR
     }
 }
 
-__device__ float interpolate_gpu( const float* ptrImgIntensity, float x, float y, int w, int h)
-{
-	float valCur = 1.1f;
-
-#if 0
-    // direct lookup, no interpolation
-    int x0 = static_cast<int>(x + 0.5f);
-    int y0 = static_cast<int>(y + 0.5f);
-    if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h)
-        valCur = ptrImgIntensity[y0*w + x0];
-#else
-    //bilinear interpolation
-    int x0 = static_cast<int>(x);
-    int y0 = static_cast<int>(y);
-    int x1 = x0 + 1;
-    int y1 = y0 + 1;
-
-    float x1_weight = x - static_cast<float>(x0);
-    float y1_weight = y - static_cast<float>(y0);
-    float x0_weight = 1.0f - x1_weight;
-    float y0_weight = 1.0f - y1_weight;
-
-    if (x0 < 0 || x0 >= w)
-        x0_weight = 0.0f;
-    if (x1 < 0 || x1 >= w)
-        x1_weight = 0.0f;
-    if (y0 < 0 || y0 >= h)
-        y0_weight = 0.0f;
-    if (y1 < 0 || y1 >= h)
-        y1_weight = 0.0f;
-    float w00 = x0_weight * y0_weight;
-    float w10 = x1_weight * y0_weight;
-    float w01 = x0_weight * y1_weight;
-    float w11 = x1_weight * y1_weight;
-
-    float sumWeights = w00 + w10 + w01 + w11;
-    float sum = 0.0f;
-    if (w00 > 0.0f)
-        sum += ptrImgIntensity[y0*w + x0] * w00;
-    if (w01 > 0.0f)
-        sum += ptrImgIntensity[y1*w + x0] * w01;
-    if (w10 > 0.0f)
-        sum += ptrImgIntensity[y0*w + x1] * w10;
-    if (w11 > 0.0f)
-        sum += ptrImgIntensity[y1*w + x1] * w11;
-
-    if (sumWeights > 0.0f)
-        valCur = sum / sumWeights;
-#endif
-
-    return valCur;
-}
-
 void matToInterleaved(float *a,const Eigen::Matrix3f &m)
 {
 	for(int i=0;i<3;i++)
@@ -995,10 +925,10 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                 float py = pt2CurH[1] * ptZinv;
 
                 // compute interpolated image gradient
-                float dX = interpolate_gpu(d_gradx, px, py, w, h);
-                float dY = interpolate_gpu(d_grady, px, py, w, h);
+                float dX = d_interpolate(d_gradx, px, py, w, h);
+                float dY = d_interpolate(d_grady, px, py, w, h);
                
-                if (dX<=1 && dY<=1)
+                if (!(isnan(dX) || isnan(dY)))
                 {
                 	//printf("dx = %f dy = %f \n",dX,dY);
                     dX = fx * dX;
