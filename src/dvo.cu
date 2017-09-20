@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 #include <iomanip>
+#include <ctime>
 
 
 #include <Eigen/Cholesky>
@@ -529,10 +530,15 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
 
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
-
+    std::cout << "calling residual kernel" << std::endl;
+    Timer ti;
+    ti.start();
     g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_ptrRotation,
                                 d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
+    ti.end();
+    float tPassed = ti.get();
+    std::cout << "took " << tPassed*1000 << " ms" << std::endl;
 
 
     cudaMemcpy(residuals, d_residuals, w*h*sizeof(float), cudaMemcpyDeviceToHost);
