@@ -1123,7 +1123,7 @@ void DVO::align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<c
         for (int itr = 0; itr < numIterations_; ++itr)
         {
             // compute residuals and Jacobian
-#if 0
+#if 1
             deriveNumeric(grayRef, depthRef, grayCur, depthCur, xi, kLevel, residuals_[lvl], J_[lvl]);
 #else
             deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, residuals_[lvl], J_[lvl]);
