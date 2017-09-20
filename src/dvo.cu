@@ -270,6 +270,42 @@ cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
 }
 
 
+__global__ void computeGradientKernel(float* out, float* in, int w, int h,
+		int xStart, int yStart, int xEnd, int yEnd, int direction)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	//Do bounds check
+	if(xStart <= x && x < xEnd && yStart <= y && y < yEnd && z < 1)
+	{
+        float v0;
+        float v1;
+        if (direction == 1)
+        {
+            // y-direction
+            v0 = in[(y-1)*w + x];
+            v1 = in[(y+1)*w + x];
+        }
+        else
+        {
+            // x-direction
+            v0 = in[y*w + (x-1)];
+            v1 = in[y*w + (x+1)];
+        }
+        out[y*w + x] = 0.5f * (v1 - v0);
+
+	}
+	//if we are out of the specified range but still inside the frame, we need to set
+	//the pixel anyway (analog to pre-initialization in the sequential code)
+	else if(x < w && y < h)
+	{
+		out[y*w + x] = 0.0f;
+	}
+}
+
+
 void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
 {
     int dirX = 1;
@@ -291,27 +327,23 @@ void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
     int yEnd = h - dirY;
     int xStart = dirX;
     int xEnd = w - dirX;
-    for (size_t y = yStart; y < yEnd; ++y)
-    {
-        for (size_t x = xStart; x < xEnd; ++x)
-        {
-            float v0;
-            float v1;
-            if (direction == 1)
-            {
-                // y-direction
-                v0 = ptrIn[(y-1)*w + x];
-                v1 = ptrIn[(y+1)*w + x];
-            }
-            else
-            {
-                // x-direction
-                v0 = ptrIn[y*w + (x-1)];
-                v1 = ptrIn[y*w + (x+1)];
-            }
-            ptrOut[y*w + x] = 0.5f * (v1 - v0);
-        }
-    }
+
+
+	float * d_ptrIn, * d_ptrOut;
+	cudaMalloc(&d_ptrIn,w*h*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_ptrIn,ptrIn,w*h*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+	cudaMalloc(&d_ptrOut,w*h*sizeof(float)); CUDA_CHECK;
+
+    dim3 block = dim3(64,8,1);
+    dim3 grid = dim3((w+1+block.x-1) / block.x,
+		(h+1+block.y - 1) / block.y,
+		1);
+    computeGradientKernel<<<grid,block>>>(d_ptrOut, d_ptrIn, w, h, xStart, yStart, xEnd, yEnd, direction);
+    cudaDeviceSynchronize(); CUDA_CHECK;
+
+	cudaMemcpy(ptrOut,d_ptrOut,w*h*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
+	cudaFree(d_ptrIn); CUDA_CHECK;
+	cudaFree(d_ptrOut); CUDA_CHECK;
 }
 
 
@@ -746,8 +778,88 @@ void DVO::deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
 }
 
 
+__global__ void computeJtRIntermediateResultKernel(float* out, const float* J, const float* residuals, int m, int j)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	if(i<m && y < 1 && z < 1)
+	{
+		out[i] = J[i*6 + j] * residuals[i];
+	}
+}
+
+
+
 void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int validRows)
 {
+/*    float mean, stdDev;
+
+    // wrap raw pointer with a device_ptr
+    thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
+
+    // sum elements and divide by the number of elements
+    mean = thrust::reduce(
+        dp_residuals,
+        dp_residuals+n,
+        0.0f,
+        thrust::plus<float>()) / n;
+
+    // shift elements by mean, square, and add them
+    float variance = thrust::transform_reduce(
+    		dp_residuals,
+    		dp_residuals+n,
+            varianceshifteop(mean),
+            0.0f,
+            thrust::plus<float>());
+*/
+#if 1
+    int n = 6;
+    int m = validRows;
+
+    float * d_J, * d_residuals, * d_intermediate;
+    cudaMalloc(&d_intermediate, m * sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_residuals, m * sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_residuals, residuals, m * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_J, m*6*sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_J, J, m*6*sizeof(float), cudaMemcpyHostToDevice); CUDA_CHECK;
+
+	dim3 block = dim3(128,1,1);
+	dim3 grid = dim3((m+block.x-1) / block.x,
+		1,
+		1);
+
+    // compute b = Jt*r
+    for (int j = 0; j < n; ++j)
+    {
+        //for (int i = 0; i < m; ++i)
+            //val += J[i*6 + j] * residuals[i];
+    	//this loop is replaced by the following GPU code:
+    	//first element-wise multiplication into temporary memory, then summation over that.
+
+    	computeJtRIntermediateResultKernel<<<grid,block>>>(d_intermediate, d_J, d_residuals, m, j);
+    	cudaDeviceSynchronize(); CUDA_CHECK;
+
+        // wrap raw pointer with a device_ptr
+        thrust::device_ptr<float> dp_intermediate = thrust::device_pointer_cast(d_intermediate);
+
+        // sum elements
+        float val = thrust::reduce(
+            dp_intermediate,
+            dp_intermediate+m,
+            0.0f,
+            thrust::plus<float>());
+
+        b[j] = val;
+    }
+
+    cudaFree(d_J); CUDA_CHECK;
+    cudaFree(d_residuals); CUDA_CHECK;
+    cudaFree(d_intermediate); CUDA_CHECK;
+
+#else
     int n = 6;
     int m = validRows;
 
@@ -759,6 +871,7 @@ void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int vali
             val += J[i*6 + j] * residuals[i];
         b[j] = val;
     }
+#endif
 }
 
 __global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRows, bool useWeights, int j, int k, float *d_res) {
@@ -769,7 +882,7 @@ __global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRo
     	float valSqr = d_J[i*6 + j] * d_J[i*6 + k];
     	if (useWeights)
     		valSqr *= d_weights[i];
-    	atomicAdd(d_res,valSqr);
+    	d_res[i] = valSqr;
     }
 
 }
@@ -777,6 +890,7 @@ __global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRo
 
 void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validRows, bool useWeights)
 {
+
     int n = 6;
     int m = validRows;
 
@@ -788,30 +902,66 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validR
     cudaMalloc(&d_weights,sizeof(float)*m);
     cudaMemcpy(d_weights,weights,sizeof(float)*m,cudaMemcpyHostToDevice);
 
+	Timer t;
+	t.start();
+
     // compute A = Jt*J
     for (int k = 0; k < n; ++k)
     {
         for (int j = 0; j < n; ++j)
         {
 
-            float val = 0.0f;
-
-            float *d_val;
-            cudaMalloc(&d_val,sizeof(float));
-            cudaMemcpy(d_val, &val, sizeof(float),cudaMemcpyHostToDevice);
+            float *d_res;
+            cudaMalloc(&d_res,sizeof(float)*m);
 
             dim3 block =  dim3(256,1,1);
             dim3 grid = dim3((m+block.x-1)/block.x,1,1);
-            JtJKernel <<<grid,block>>> (d_J, d_weights, validRows, useWeights, j, k , d_val);
+            JtJKernel <<<grid,block>>> (d_J, d_weights, validRows, useWeights, j, k , d_res);
             cudaDeviceSynchronize();
 
-			cudaMemcpy(&val,d_val,sizeof(float),cudaMemcpyDeviceToHost);
-            cudaFree(d_val);
+            thrust::device_ptr<float> dp_res = thrust::device_pointer_cast(d_res);
+
+            // sum elements
+            float val = thrust::reduce(
+                dp_res,
+                dp_res+m,
+                0.0f,
+                thrust::plus<float>());
+
             A(k,j) = val;
+            cudaFree(d_res);
         }
     }
     cudaFree(d_J);
     cudaFree(d_weights);
+
+    t.end();
+    std::cout << "GPU: " << t.get() << std::endl;
+
+    t.start();
+    n = 6;
+    m = validRows;
+
+    // compute A = Jt*J
+    for (int k = 0; k < n; ++k)
+    {
+        for (int j = 0; j < n; ++j)
+        {
+            float val = 0.0f;
+            for (int i = 0; i < m; ++i)
+            {
+                float valSqr = J[i*6 + j] * J[i*6 + k];
+                if (useWeights)
+                    valSqr *= weights[i];
+                val += valSqr;
+            }
+            A(k, j) = val;
+        }
+    }
+
+    t.end();
+    std::cout << "CPU: " << t.get() << std::endl;
+
 }
 
 void matToInterleaved(float *a,const Eigen::Matrix3f &m)
@@ -858,101 +1008,6 @@ __device__ void multiply(float *mat,float *v,float *res)
 		}
 		res[i] = sum;
 	}
-
-}
-
-__global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float * d_rotMat, float* d_t,
-		float *d_gradx,float *d_grady,int w, int h,float *d_J)
-{
-
-	int x = threadIdx.x + blockDim.x*blockIdx.x;
-	int y = threadIdx.y + blockDim.y*blockIdx.y;
-
-		
-	if(x<w && y<h)
-	{
-		size_t idx = x + (size_t)w*y;
-
-		float residualRowJ[6];
-
-		// camera intrinsics
-		//float fx = K(0, 0);
-		float fx = d_K[0]; // Using d_K[i+3j] = k(i,j)
-		//float fy = K(1, 1);
-		float fy = d_K[4];
-		//float cx = K(0, 2);
-		float cx = d_K[6];
-		//float cy = K(1, 2);
-		float cy = d_K[7];
-		
-		float fxInv = 1.0f / fx;
-		float fyInv = 1.0f / fy;
-
-        // project 2d point back into 3d using its depth
-        float dRef = d_ptrDepthRef[idx];
-        if (dRef > 0.0f)
-        {
-            float x0 = (static_cast<float>(x) - cx) * fxInv;
-            float y0 = (static_cast<float>(y) - cy) * fyInv;
-            float scale = 1.0f;
-            //scale = std::sqrt(x0*x0 + y0*y0 + 1.0);
-            dRef = dRef * scale;
-            x0 = x0 * dRef;
-            y0 = y0 * dRef;
-
-            // transform reference 3d point into current frame
-            // reference 3d point
-            // Eigen::Vector3f pt3Ref(x0, y0, dRef);
-            float pt3Ref[3] = {x0,y0,dRef};
-            float pt3[3];
-           
-            rotateAndTranslate(d_rotMat,d_t,pt3Ref,pt3);
-            
-            if (pt3[2] > 0.0f)
-            {
-            
-                // project 3d point to 2d
-                float pt2CurH[3];
-                multiply(d_K,pt3,pt2CurH);
-            	//Eigen::Vector3f pt2CurH = K * pt3;
-               
-                float ptZinv = 1.0f / pt2CurH[2];
-                float px = pt2CurH[0] * ptZinv;
-                float py = pt2CurH[1] * ptZinv;
-
-                // compute interpolated image gradient
-                float dX = d_interpolate(d_gradx, px, py, w, h);
-                float dY = d_interpolate(d_grady, px, py, w, h);
-               
-                if (!isnan(dX) && !isnan(dY))
-                {
-                	//printf("dx = %f dy = %f \n",dX,dY);
-                    dX = fx * dX;
-                    dY = fy * dY;
-                    float pt3Zinv = 1.0f / pt3[2];
-
-                    // shorter computation
-                    residualRowJ[0] = dX * pt3Zinv;
-                    residualRowJ[1] = dY * pt3Zinv;
-                    residualRowJ[2] = - (dX * pt3[0] + dY * pt3[1]) * pt3Zinv * pt3Zinv;
-                    residualRowJ[3] = - (dX * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv - dY * (1 + (pt3[1] * pt3Zinv) * (pt3[1] * pt3Zinv));
-                    residualRowJ[4] = + dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) + (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv;
-                    residualRowJ[5] = (- dX * pt3[1] + dY * pt3[0]) * pt3Zinv;
-                }
-            }
-        }
-		
-        // set 1x6 Jacobian row for current residual
-        // invert Jacobian according to kerl2012msc.pdf (necessary?)
-        for (int j = 0; j < 6; ++j){
-        	size_t jidx = idx*6 + j;
-        	if(jidx < w*h*6) {
-            	d_J[idx*6 + j] = - residualRowJ[j];
-            	}
-        }
-
-	}
-
 
 }
 
