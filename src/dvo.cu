@@ -18,6 +18,7 @@
 #include <opencv2/highgui/highgui.hpp>
 
 #include <cuda_runtime.h>
+#include <thrust/count.h>
 
 
 DVO::DVO() :
@@ -314,20 +315,48 @@ void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
 }
 
 
+struct is_nonzero : public thrust::unary_function<float,bool>
+{
+    __host__ __device__
+    bool operator()(float x)
+    {
+        return  x != 0.0f;
+    }
+};
+
+struct squareop
+    : std::unary_function<float, float>
+    {
+        __device__ float operator()(float data) {
+        	return data*data;
+        }
+    };
+
+
 float DVO::calculateError(const float* residuals, int n)
 {
+
     float error = 0.0f;
-    int numValid = 0;
-    for (int i = 0; i < n; ++i)
-    {
-        if (residuals[i] != 0.0f)
-        {
-            error += residuals[i] * residuals[i];
-            ++numValid;
-        }
-    }
+
+    float* d_residuals;
+    cudaMalloc(&d_residuals, sizeof(float)*n);
+    cudaMemcpy(d_residuals, residuals, sizeof(float)*n, cudaMemcpyHostToDevice);
+
+    thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
+
+    int numValid = thrust::count_if(dp_residuals,dp_residuals+n, is_nonzero());
+    error = thrust::transform_reduce(
+    		dp_residuals,
+    		dp_residuals+n,
+            squareop(),
+            0.0f,
+            thrust::plus<float>());
+
     if (numValid > 0)
-        error = error / static_cast<float>(numValid);
+    	error = error / static_cast<float>(numValid);
+
+    cudaFree(d_residuals);
+
     return error;
 }
 
@@ -535,16 +564,9 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
 
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
-    std::cout << "calling residual kernel" << std::endl;
-    Timer ti;
-    ti.start();
     g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_ptrRotation,
                                 d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
-    ti.end();
-    float tPassed = ti.get();
-    std::cout << "took " << tPassed*1000 << " ms" << std::endl;
-
 
     cudaMemcpy(residuals, d_residuals, w*h*sizeof(float), cudaMemcpyDeviceToHost);
     cudaFree(d_ptrGrayRef);
@@ -981,6 +1003,7 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
 	
 
     computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
+    cudaDeviceSynchronize();
 
     cudaMemcpy(J,d_J,6*n*sizeof(float),cudaMemcpyDeviceToHost);CUDA_CHECK;
 
