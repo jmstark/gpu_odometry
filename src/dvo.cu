@@ -269,6 +269,42 @@ cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
 }
 
 
+__global__ void computeGradientKernel(float* out, float* in, int w, int h,
+		int xStart, int yStart, int xEnd, int yEnd, int direction)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	//Do bounds check
+	if(xStart <= x && x < xEnd && yStart <= y && y < yEnd && z < 1)
+	{
+        float v0;
+        float v1;
+        if (direction == 1)
+        {
+            // y-direction
+            v0 = in[(y-1)*w + x];
+            v1 = in[(y+1)*w + x];
+        }
+        else
+        {
+            // x-direction
+            v0 = in[y*w + (x-1)];
+            v1 = in[y*w + (x+1)];
+        }
+        out[y*w + x] = 0.5f * (v1 - v0);
+
+	}
+	//if we are out of the specified range but still inside the frame, we need to set
+	//the pixel anyway (analog to pre-initialization in the sequential code)
+	else if(x < w && y < h)
+	{
+		out[y*w + x] = 0.0f;
+	}
+}
+
+
 void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
 {
     int dirX = 1;
@@ -290,27 +326,23 @@ void DVO::computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction)
     int yEnd = h - dirY;
     int xStart = dirX;
     int xEnd = w - dirX;
-    for (size_t y = yStart; y < yEnd; ++y)
-    {
-        for (size_t x = xStart; x < xEnd; ++x)
-        {
-            float v0;
-            float v1;
-            if (direction == 1)
-            {
-                // y-direction
-                v0 = ptrIn[(y-1)*w + x];
-                v1 = ptrIn[(y+1)*w + x];
-            }
-            else
-            {
-                // x-direction
-                v0 = ptrIn[y*w + (x-1)];
-                v1 = ptrIn[y*w + (x+1)];
-            }
-            ptrOut[y*w + x] = 0.5f * (v1 - v0);
-        }
-    }
+
+
+	float * d_ptrIn, * d_ptrOut;
+	cudaMalloc(&d_ptrIn,w*h*sizeof(float)); CUDA_CHECK;
+	cudaMemcpy(d_ptrIn,ptrIn,w*h*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
+	cudaMalloc(&d_ptrOut,w*h*sizeof(float)); CUDA_CHECK;
+
+    dim3 block = dim3(64,8,1);
+    dim3 grid = dim3((w+1+block.x-1) / block.x,
+		(h+1+block.y - 1) / block.y,
+		1);
+    computeGradientKernel<<<grid,block>>>(d_ptrOut, d_ptrIn, w, h, xStart, yStart, xEnd, yEnd, direction);
+    cudaDeviceSynchronize(); CUDA_CHECK;
+
+	cudaMemcpy(ptrOut,d_ptrOut,w*h*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
+	cudaFree(d_ptrIn); CUDA_CHECK;
+	cudaFree(d_ptrOut); CUDA_CHECK;
 }
 
 
@@ -725,8 +757,88 @@ void DVO::deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
 }
 
 
+__global__ void computeJtRIntermediateResultKernel(float* out, const float* J, const float* residuals, int m, int j)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	if(i<m && y < 1 && z < 1)
+	{
+		out[i] = J[i*6 + j] * residuals[i];
+	}
+}
+
+
+
 void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int validRows)
 {
+/*    float mean, stdDev;
+
+    // wrap raw pointer with a device_ptr
+    thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
+
+    // sum elements and divide by the number of elements
+    mean = thrust::reduce(
+        dp_residuals,
+        dp_residuals+n,
+        0.0f,
+        thrust::plus<float>()) / n;
+
+    // shift elements by mean, square, and add them
+    float variance = thrust::transform_reduce(
+    		dp_residuals,
+    		dp_residuals+n,
+            varianceshifteop(mean),
+            0.0f,
+            thrust::plus<float>());
+*/
+#if 1
+    int n = 6;
+    int m = validRows;
+
+    float * d_J, * d_residuals, * d_intermediate;
+    cudaMalloc(&d_intermediate, m * sizeof(float)); CUDA_CHECK;
+    cudaMalloc(&d_residuals, m * sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_residuals, residuals, m * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMalloc(&d_J, m*6*sizeof(float)); CUDA_CHECK;
+    cudaMemcpy(d_J, J, m*6*sizeof(float), cudaMemcpyHostToDevice); CUDA_CHECK;
+
+	dim3 block = dim3(128,1,1);
+	dim3 grid = dim3((m+block.x-1) / block.x,
+		1,
+		1);
+
+    // compute b = Jt*r
+    for (int j = 0; j < n; ++j)
+    {
+        //for (int i = 0; i < m; ++i)
+            //val += J[i*6 + j] * residuals[i];
+    	//this loop is replaced by the following GPU code:
+    	//first element-wise multiplication into temporary memory, then summation over that.
+
+    	computeJtRIntermediateResultKernel<<<grid,block>>>(d_intermediate, d_J, d_residuals, m, j);
+    	cudaDeviceSynchronize(); CUDA_CHECK;
+
+        // wrap raw pointer with a device_ptr
+        thrust::device_ptr<float> dp_intermediate = thrust::device_pointer_cast(d_intermediate);
+
+        // sum elements
+        float val = thrust::reduce(
+            dp_intermediate,
+            dp_intermediate+m,
+            0.0f,
+            thrust::plus<float>());
+
+        b[j] = val;
+    }
+
+    cudaFree(d_J); CUDA_CHECK;
+    cudaFree(d_residuals); CUDA_CHECK;
+    cudaFree(d_intermediate); CUDA_CHECK;
+
+#else
     int n = 6;
     int m = validRows;
 
@@ -738,6 +850,7 @@ void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int vali
             val += J[i*6 + j] * residuals[i];
         b[j] = val;
     }
+#endif
 }
 
 
@@ -882,7 +995,7 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
 
 
 
-
+#if 0
 void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
                    const cv::Mat &grayCur, const cv::Mat &depthCur,
                    const cv::Mat &gradX, const cv::Mat &gradY,
@@ -975,7 +1088,151 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     }
 
 }
+#else
+float interpolate(const float* ptrImgIntensity, float x, float y, int w, int h)
+{
+    float valCur = std::numeric_limits<float>::quiet_NaN();
 
+#if 0
+    // direct lookup, no interpolation
+    int x0 = static_cast<int>(x + 0.5f);
+    int y0 = static_cast<int>(y + 0.5f);
+    if (x0 >= 0 && x0 < w && y0 >= 0 && y0 < h)
+        valCur = ptrImgIntensity[y0*w + x0];
+#else
+    //bilinear interpolation
+    int x0 = static_cast<int>(x);
+    int y0 = static_cast<int>(y);
+    int x1 = x0 + 1;
+    int y1 = y0 + 1;
+
+    float x1_weight = x - static_cast<float>(x0);
+    float y1_weight = y - static_cast<float>(y0);
+    float x0_weight = 1.0f - x1_weight;
+    float y0_weight = 1.0f - y1_weight;
+
+    if (x0 < 0 || x0 >= w)
+        x0_weight = 0.0f;
+    if (x1 < 0 || x1 >= w)
+        x1_weight = 0.0f;
+    if (y0 < 0 || y0 >= h)
+        y0_weight = 0.0f;
+    if (y1 < 0 || y1 >= h)
+        y1_weight = 0.0f;
+    float w00 = x0_weight * y0_weight;
+    float w10 = x1_weight * y0_weight;
+    float w01 = x0_weight * y1_weight;
+    float w11 = x1_weight * y1_weight;
+
+    float sumWeights = w00 + w10 + w01 + w11;
+    float sum = 0.0f;
+    if (w00 > 0.0f)
+        sum += ptrImgIntensity[y0*w + x0] * w00;
+    if (w01 > 0.0f)
+        sum += ptrImgIntensity[y1*w + x0] * w01;
+    if (w10 > 0.0f)
+        sum += ptrImgIntensity[y0*w + x1] * w10;
+    if (w11 > 0.0f)
+        sum += ptrImgIntensity[y1*w + x1] * w11;
+
+    if (sumWeights > 0.0f)
+        valCur = sum / sumWeights;
+#endif
+
+    return valCur;
+}
+void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
+                   const cv::Mat &grayCur, const cv::Mat &depthCur,
+                   const cv::Mat &gradX, const cv::Mat &gradY,
+                   const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
+                   float* residuals, float* J)
+{
+    // reference input images
+    int w = grayRef.cols;
+    int h = grayRef.rows;
+    int n = w*h;
+    const float* ptrDepthRef = (const float*)depthRef.data;
+
+    // camera intrinsics
+    float fx = K(0, 0);
+    float fy = K(1, 1);
+    float cx = K(0, 2);
+    float cy = K(1, 2);
+    float fxInv = 1.0f / fx;
+    float fyInv = 1.0f / fy;
+
+    // convert SE3 to rotation matrix and translation vector
+    Eigen::Matrix3f rotMat;
+    Eigen::Vector3f t;
+    convertSE3ToTf(xi, rotMat, t);
+
+    // calculate per-pixel residuals
+    calculateError(grayRef, depthRef, grayCur, depthCur, xi, K, residuals);
+
+    // reference gradient images
+    const float* ptrGradX = (const float*)gradX.data;
+    const float* ptrGradY = (const float*)gradY.data;
+
+    // create and fill Jacobian row by row
+    float residualRowJ[6];
+    for (size_t y = 0; y < h; ++y)
+    {
+        for (size_t x = 0; x < w; ++x)
+        {
+            size_t off = y*w + x;
+
+            // project 2d point back into 3d using its depth
+            float dRef = ptrDepthRef[y*w + x];
+            if (dRef > 0.0f)
+            {
+                float x0 = (static_cast<float>(x) - cx) * fxInv;
+                float y0 = (static_cast<float>(y) - cy) * fyInv;
+                float scale = 1.0f;
+                //scale = std::sqrt(x0*x0 + y0*y0 + 1.0);
+                dRef = dRef * scale;
+                x0 = x0 * dRef;
+                y0 = y0 * dRef;
+
+                // transform reference 3d point into current frame
+                // reference 3d point
+                Eigen::Vector3f pt3Ref(x0, y0, dRef);
+                Eigen::Vector3f pt3 = rotMat * pt3Ref + t;
+                if (pt3[2] > 0.0f)
+                {
+                    // project 3d point to 2d
+                    Eigen::Vector3f pt2CurH = K * pt3;
+                    float ptZinv = 1.0f / pt2CurH[2];
+                    float px = pt2CurH[0] * ptZinv;
+                    float py = pt2CurH[1] * ptZinv;
+
+                    // compute interpolated image gradient
+                    float dX = interpolate(ptrGradX, px, py, w, h);
+                    float dY = interpolate(ptrGradY, px, py, w, h);
+                    if (!std::isnan(dX) && !std::isnan(dY))
+                    {
+                        dX = fx * dX;
+                        dY = fy * dY;
+                        float pt3Zinv = 1.0f / pt3[2];
+
+                        // shorter computation
+                        residualRowJ[0] = dX * pt3Zinv;
+                        residualRowJ[1] = dY * pt3Zinv;
+                        residualRowJ[2] = - (dX * pt3[0] + dY * pt3[1]) * pt3Zinv * pt3Zinv;
+                        residualRowJ[3] = - (dX * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv - dY * (1 + (pt3[1] * pt3Zinv) * (pt3[1] * pt3Zinv));
+                        residualRowJ[4] = + dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) + (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv;
+                        residualRowJ[5] = (- dX * pt3[1] + dY * pt3[0]) * pt3Zinv;
+                    }
+                }
+            }
+
+            // set 1x6 Jacobian row for current residual
+            // invert Jacobian according to kerl2012msc.pdf (necessary?)
+            for (int j = 0; j < 6; ++j)
+                J[off*6 + j] = - residualRowJ[j];
+        }
+    }
+}
+#endif
 
 void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::Mat> &depthPyramid, std::vector<cv::Mat> &grayPyramid)
 {
