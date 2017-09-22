@@ -522,8 +522,6 @@ __global__ void g_residualKernel(const float* d_ptrGrayRef,
         d_residuals[idx] = residual;
     }
 }
-
-
 void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
                          const cv::Mat &grayCur, const cv::Mat &depthCur,
                          const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
@@ -532,6 +530,9 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     // create residual image
     int w = grayRef.cols;
     int h = grayRef.rows;
+
+    std::cout << w << " x " << h << std::endl;
+
 
     // camera intrinsics
     float fx = K(0, 0);
@@ -589,7 +590,8 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
                                 d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
 
-    cudaMemcpy(residuals, d_residuals, w*h*sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(residuals, d_residuals, w*h*sizeof(float), cudaMemcpyDeviceToHost);CUDA_CHECK;
+
     cudaFree(d_ptrGrayRef);
     cudaFree(d_ptrDepthRef);
     cudaFree(d_ptrRotation);
@@ -597,6 +599,62 @@ void DVO::calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
     cudaFree(d_residuals);
     //cudaUnbindTexture(texGrayCur);
     cudaFree(d_ptrGrayCur);
+}
+
+
+void DVO::calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
+                         const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
+                         const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
+                         float* residuals)
+{
+
+    // create residual image
+    int w = grayRef.cols;
+    int h = grayRef.rows;
+
+    std::cout << w << " x " << h << std::endl;
+
+    // camera intrinsics
+    float fx = K(0, 0);
+    float fy = K(1, 1);
+    float cx = K(0, 2);
+    float cy = K(1, 2);
+
+    // convert SE3 to rotation matrix and translation vector
+    Eigen::Matrix3f rotMat;
+    Eigen::Vector3f t;
+    convertSE3ToTf(xi, rotMat, t);
+
+    float* d_ptrGrayRef = (float*)grayRef.ptr();
+    float* d_ptrDepthRef = (float*)depthRef.ptr();
+    float* d_ptrGrayCur = (float*)grayCur.ptr();
+    float* d_ptrDepthCur = (float*)depthCur.ptr();
+
+    float* d_ptrRotation;
+    cudaMalloc(&d_ptrRotation, 9*sizeof(float));
+    cudaMemcpy(d_ptrRotation, rotMat.data(), 9*sizeof(float), cudaMemcpyHostToDevice);
+
+    float* d_ptrTranslation;
+    cudaMalloc(&d_ptrTranslation, 3*sizeof(float));
+    cudaMemcpy(d_ptrTranslation, t.data(), 3*sizeof(float), cudaMemcpyHostToDevice);
+
+    float* d_residuals;
+    cudaMalloc(&d_residuals, w*h*sizeof(float));
+
+    dim3 block = dim3(32,8,1);
+    dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
+    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_ptrRotation,
+                                d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(residuals, d_residuals, w*h*sizeof(float), cudaMemcpyDeviceToHost); CUDA_CHECK;
+
+    cudaFree(d_ptrRotation);
+    cudaFree(d_ptrTranslation);
+    cudaFree(d_residuals);
+    //cudaUnbindTexture(texGrayCur);
+
+
 }
 
 
@@ -748,6 +806,7 @@ void DVO::deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
     int n = w*h;
 
     // calculate per-pixel residuals
+    //calculateError(convertToContGpuMat(grayRef), convertToContGpuMat(depthRef), convertToContGpuMat(grayCur), convertToContGpuMat(depthCur), xi, K, residuals);
     calculateError(grayRef, depthRef, grayCur, depthCur, xi, K, residuals);
 
     // create and fill Jacobian column by column
@@ -760,7 +819,9 @@ void DVO::deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
         // left-multiplicative increment on SE3
         Eigen::VectorXf xiEps = Sophus::SE3f::log(Sophus::SE3f::exp(unitVec) * Sophus::SE3f::exp(xi));
 
+        //calculateError(convertToContGpuMat(grayRef), convertToContGpuMat(depthRef), convertToContGpuMat(grayCur), convertToContGpuMat(depthCur), xiEps, K, residualsInc);
         calculateError(grayRef, depthRef, grayCur, depthCur, xiEps, K, residualsInc);
+
         for (int i = 0; i < n; ++i)
             J[i*6 + j] = (residualsInc[i] - residuals[i]) * scale;
     }
@@ -1007,8 +1068,8 @@ __device__ void multiply(float *mat,float *v,float *res)
 
 }
 
-void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
-                   const cv::Mat &grayCur, const cv::Mat &depthCur,
+void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
+                   const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                    const cv::Mat &gradX, const cv::Mat &gradY,
                    const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                    float* residuals, float* J)
@@ -1017,7 +1078,8 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     int w = grayRef.cols;
     int h = grayRef.rows;
     int n = w*h;
-    const float* ptrDepthRef = (const float*)depthRef.data;
+    cv::Mat depthRefC(depthRef);
+    const float* ptrDepthRef = (const float*)depthRefC.data;
 
     // camera intrinsics
     float fx = K(0, 0);
@@ -1033,6 +1095,25 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     convertSE3ToTf(xi, rotMat, t);
 
     // calculate per-pixel residuals
+
+    //cv::gpu::GpuMat gR = convertToContGpuMat(grayRef.clone());
+    //cv::gpu::GpuMat dR = convertToContGpuMat(depthRef.clone());
+    //cv::gpu::GpuMat gC = convertToContGpuMat(grayCur.clone());
+    //cv::gpu::GpuMat dC = convertToContGpuMat(depthCur.clone());
+
+    //cv::gpu::GpuMat gR(grayRef);
+    //cv::gpu::GpuMat dR(depthRef);
+    //cv::gpu::GpuMat gC(grayCur);
+    //cv::gpu::GpuMat dC(depthCur);
+
+
+    /*std::cout << cv::Mat(gR) << std::endl;
+    std::cout << std::endl << "vs" << std::endl;
+    std::cout << grayRef << std::endl;*/
+
+
+    //calculateError(gR, dR, gC, dC, xi, K, residuals);
+
     calculateError(grayRef, depthRef, grayCur, depthCur, xi, K, residuals);
 
     // reference gradient images
@@ -1045,6 +1126,7 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     {
         for (size_t x = 0; x < w; ++x)
         {
+
             size_t off = y*w + x;
 
             // project 2d point back into 3d using its depth
@@ -1099,8 +1181,8 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     }
 }
 
-cv::gpu::GpuMat convertToContGpuMat(const cv::Mat m) {
-    cv::gpu::GpuMat gpuM = cv::gpu::createContinuous(m.rows,m.cols,m.type());
+cv::gpu::GpuMat DVO::convertToContGpuMat(const cv::Mat &m) {
+    cv::gpu::GpuMat gpuM = cv::gpu::createContinuous(m.rows, m.cols, m.type());
     gpuM.upload(m);
     return gpuM;
 }
@@ -1149,19 +1231,6 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
                 const std::vector<cv::gpu::GpuMat> &depthCurGPUPyramid, const std::vector<cv::gpu::GpuMat> &grayCurGPUPyramid,
                 Eigen::Matrix4f &pose)
 {
-    std::vector<cv::Mat> grayRefPyramid;
-    std::vector<cv::Mat> depthRefPyramid;
-    std::vector<cv::Mat> grayCurPyramid;
-    std::vector<cv::Mat> depthCurPyramid;
-
-    for(int i = 0; i < numPyramidLevels_; ++i) {
-
-        grayRefPyramid.push_back(cv::Mat(grayRefGPUPyramid[i]));
-        depthRefPyramid.push_back(cv::Mat(depthRefGPUPyramid[i]));
-
-        grayCurPyramid.push_back(cv::Mat(grayCurGPUPyramid[i]));
-        depthCurPyramid.push_back(cv::Mat(depthCurGPUPyramid[i]));
-    }
 
     Vec6f xi;
     convertTfToSE3(pose, xi);
@@ -1185,16 +1254,16 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
         int h = sizePyramid_[lvl].height;
         int n = w*h;
 
-        cv::Mat grayRef = grayRefPyramid[lvl];
-        cv::Mat depthRef = depthRefPyramid[lvl];
-        cv::Mat grayCur = grayCurPyramid[lvl];
-        cv::Mat depthCur = depthCurPyramid[lvl];
+        cv::gpu::GpuMat grayRef = grayRefGPUPyramid[lvl];
+        cv::gpu::GpuMat depthRef = depthRefGPUPyramid[lvl];
+        cv::gpu::GpuMat grayCur = grayCurGPUPyramid[lvl];
+        cv::gpu::GpuMat depthCur = depthCurGPUPyramid[lvl];
         Eigen::Matrix3f kLevel = kPyramid_[lvl];
         //std::cout << "level " << level << " (size " << depthRef.cols << "x" << depthRef.rows << ")" << std::endl;
 
         // compute gradient images
-        computeGradient(grayCur, gradX_[lvl], 0);
-        computeGradient(grayCur, gradY_[lvl], 1);
+        computeGradient(cv::Mat(grayCur), gradX_[lvl], 0);
+        computeGradient(cv::Mat(grayCur), gradY_[lvl], 1);
 
         float errorLast = std::numeric_limits<float>::max();
         for (int itr = 0; itr < numIterations_; ++itr)

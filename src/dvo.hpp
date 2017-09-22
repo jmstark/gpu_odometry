@@ -51,13 +51,21 @@ private:
     void convertTfToSE3(const Eigen::Matrix3f &rot, const Eigen::Vector3f &t, Vec6f &xi);
     void convertTfToSE3(const Eigen::Matrix4f &pose, Vec6f &xi);
 
+    cv::gpu::GpuMat convertToContGpuMat(const cv::Mat &m);
+
     void computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction);
     float calculateError(const float* residuals, int n);
     void calculateErrorImage(const float* residuals, int w, int h, cv::Mat &errorImage);
+    void calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
+                        const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
+                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
+                        float* residuals);
+
     void calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
                         const cv::Mat &grayCur, const cv::Mat &depthCur,
                         const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                         float* residuals);
+
     void calculateMeanStdDev(const float* residuals, float &mean, float &stdDev, int n);
     void computeWeights(const float* residuals, float* weights, int n);
     void applyWeights(const float* weights, float* residuals, int n);
@@ -66,8 +74,8 @@ private:
                                       const cv::Mat &grayCur, const cv::Mat &depthCur,
                                       const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                                       float* residuals, float* J);
-    void deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
-                       const cv::Mat &grayCur, const cv::Mat &depthCur,
+    void deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
+                       const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                        const cv::Mat &gradX_, const cv::Mat &gradY_,
                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                        float* residuals, float* J);
