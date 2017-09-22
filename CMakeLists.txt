@@ -21,16 +21,17 @@ FIND_PACKAGE(Eigen REQUIRED)
 INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 
 # OpenCV
-FIND_PACKAGE(OpenCV 2.4.8 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED)
+FIND_PACKAGE(OpenCV 2.4.8 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED PATHS "/usr/local/")
 
 # CUDA
 FIND_PACKAGE(CUDA REQUIRED)
+option(CUDA_USE_STATIC_CUDA_RUNTIME "Use the static version of the CUDA runtime library if available" FALSE)
 
 #==============================================================================
 # Application
 #==============================================================================
 
-SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O1 -funroll-loops -D_FORCE_INLINES" )
+SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O1 -funroll-loops -D_FORCE_INLINES -DCUDA_USE_STATIC_CUDA_RUNTIME=OFF" )
 
 # preprocessor define: source directory
 ADD_DEFINITIONS(-DDVO_SOURCE_DIR=${PROJECT_SOURCE_DIR})

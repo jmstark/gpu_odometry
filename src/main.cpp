@@ -78,9 +78,9 @@ int main(int argc, char *argv[])
     DVO dvo;
     dvo.init(w, h, K);
 
-    std::vector<cv::Mat> grayRefPyramid;
-    std::vector<cv::Mat> depthRefPyramid;
-    dvo.buildPyramid(depthRef, grayRef, depthRefPyramid, grayRefPyramid);
+    std::vector<cv::gpu::GpuMat> grayRefGPUPyramid;
+    std::vector<cv::gpu::GpuMat> depthRefGPUPyramid;
+    dvo.buildPyramid(depthRef, grayRef, depthRefGPUPyramid, grayRefGPUPyramid);
 
     // process frames
     double runtimeAvg = 0.0;
@@ -97,15 +97,15 @@ int main(int argc, char *argv[])
         cv::Mat grayCur = loadGray(dataFolder + fileColor1);
         cv::Mat depthCur = loadDepth(dataFolder + fileDepth1);
         // build pyramid
-        std::vector<cv::Mat> grayCurPyramid;
-        std::vector<cv::Mat> depthCurPyramid;
-        dvo.buildPyramid(depthCur, grayCur, depthCurPyramid, grayCurPyramid);
+        std::vector<cv::gpu::GpuMat> grayCurGPUPyramid;
+        std::vector<cv::gpu::GpuMat> depthCurGPUPyramid;
+        dvo.buildPyramid(depthCur, grayCur, depthCurGPUPyramid, grayCurGPUPyramid);
 
         // frame alignment
         double tmr = (double)cv::getTickCount();
 
         Eigen::Matrix4f relPose = Eigen::Matrix4f::Identity();
-        dvo.align(depthRefPyramid, grayRefPyramid, depthCurPyramid, grayCurPyramid, relPose);
+        dvo.align(depthRefGPUPyramid, grayRefGPUPyramid, depthCurGPUPyramid, grayCurGPUPyramid, relPose);
 
         tmr = ((double)cv::getTickCount() - tmr)/cv::getTickFrequency();
         runtimeAvg += tmr;
@@ -115,8 +115,8 @@ int main(int argc, char *argv[])
         poses.push_back(absPose);
         timestamps.push_back(timeDepth1);
 
-        depthRefPyramid = depthCurPyramid;
-        grayRefPyramid = grayCurPyramid;
+        depthRefGPUPyramid = depthCurGPUPyramid;
+        grayRefGPUPyramid = grayCurGPUPyramid;
         ++framesProcessed;
     }
     std::cout << "average runtime: " << (runtimeAvg / framesProcessed) * 1000.0 << " ms" << std::endl;

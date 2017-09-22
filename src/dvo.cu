@@ -157,16 +157,18 @@ __global__ void downsampleGrayKernel(float* out, int w, int h, float* in)
 	}
 }
 
-cv::Mat DVO::downsampleGray(const cv::Mat &gray)
+
+cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray)
 {
 	float * d_in, * d_out;
     int w = gray.cols;
     int h = gray.rows;
     int wDown = w/2;
     int hDown = h/2;
-    cudaMalloc(&d_in,w*h*sizeof(float)); CUDA_CHECK;
-    cudaMemcpy(d_in,gray.data,w*h*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
-    cudaMalloc(&d_out,wDown*hDown*sizeof(float)); CUDA_CHECK;
+    d_in = (float*)gray.data;
+
+    cv::gpu::GpuMat grayDown = cv::gpu::createContinuous(hDown,wDown,gray.type());
+    d_out = (float*)grayDown.data;
 
     dim3 block = dim3(64,8,1);
     dim3 grid = dim3((w+block.x-1) / block.x,
@@ -175,14 +177,7 @@ cv::Mat DVO::downsampleGray(const cv::Mat &gray)
     downsampleGrayKernel<<<grid,block>>>(d_out, w, h, d_in);
     cudaDeviceSynchronize(); CUDA_CHECK;
 
-    cv::Mat grayDown = cv::Mat::zeros(hDown, wDown, gray.type());
-    float* ptrOut = (float*)grayDown.data;
-
-    cudaMemcpy(ptrOut,d_out,wDown*hDown*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
-    cudaFree(d_out); CUDA_CHECK;
-    cudaFree(d_in); CUDA_CHECK;
     return grayDown;
-
 }
 
 
@@ -240,17 +235,18 @@ __global__ void downsampleDepthKernel(float* out, int w, int h, float* in)
 }
 
 
-cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
+cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth)
 {
 
-	float * d_in, * d_out;
+    float * d_in, * d_out;
     int w = depth.cols;
     int h = depth.rows;
     int wDown = w/2;
     int hDown = h/2;
-    cudaMalloc(&d_in,w*h*sizeof(float)); CUDA_CHECK;
-    cudaMemcpy(d_in,depth.data,w*h*sizeof(float),cudaMemcpyHostToDevice); CUDA_CHECK;
-    cudaMalloc(&d_out,wDown*hDown*sizeof(float)); CUDA_CHECK;
+    d_in = (float*)depth.data;
+
+    cv::gpu::GpuMat depthDown = cv::gpu::createContinuous(hDown,wDown,depth.type());
+    d_out = (float*)depthDown.data;
 
     dim3 block = dim3(64,8,1);
     dim3 grid = dim3((w+block.x-1) / block.x,
@@ -259,12 +255,6 @@ cv::Mat DVO::downsampleDepth(const cv::Mat &depth)
     downsampleDepthKernel<<<grid,block>>>(d_out, w, h, d_in);
     cudaDeviceSynchronize(); CUDA_CHECK;
 
-
-    cv::Mat depthDown = cv::Mat::zeros(hDown, wDown, depth.type());
-    float* ptrOut = (float*)depthDown.data;
-    cudaMemcpy(ptrOut,d_out,wDown*hDown*sizeof(float),cudaMemcpyDeviceToHost); CUDA_CHECK;
-    cudaFree(d_out); CUDA_CHECK;
-    cudaFree(d_in); CUDA_CHECK;
     return depthDown;
 
 }
@@ -1109,43 +1099,70 @@ void DVO::deriveAnalytic(const cv::Mat &grayRef, const cv::Mat &depthRef,
     }
 }
 
-void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::Mat> &depthPyramid, std::vector<cv::Mat> &grayPyramid)
+cv::gpu::GpuMat convertToContGpuMat(const cv::Mat m) {
+    cv::gpu::GpuMat gpuM = cv::gpu::createContinuous(m.rows,m.cols,m.type());
+    gpuM.upload(m);
+    return gpuM;
+}
+
+void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::gpu::GpuMat> &depthPyramid, std::vector<cv::gpu::GpuMat> &grayPyramid)
 {
-    grayPyramid.push_back(gray);
-    depthPyramid.push_back(depth);
+    grayPyramid.push_back(convertToContGpuMat(gray));
+    depthPyramid.push_back(convertToContGpuMat(depth));
 
     for (int i = 1; i < numPyramidLevels_; ++i)
     {
         // downsample grayscale image
-        cv::Mat grayDown = downsampleGray(grayPyramid[i-1]);
+        cv::gpu::GpuMat grayDown = downsampleGray(grayPyramid[i-1]);
         grayPyramid.push_back(grayDown);
 
         // downsample depth image
-        cv::Mat depthDown = downsampleDepth(depthPyramid[i-1]);
+        cv::gpu::GpuMat depthDown = downsampleDepth(depthPyramid[i-1]);
         depthPyramid.push_back(depthDown);
+
     }
+
+
+
 }
 
 
 void DVO::align(const cv::Mat &depthRef, const cv::Mat &grayRef, const cv::Mat &depthCur, const cv::Mat &grayCur, Eigen::Matrix4f &pose)
 {
     // downsampling
-    std::vector<cv::Mat> grayRefPyramid;
-    std::vector<cv::Mat> depthRefPyramid;
-    buildPyramid(depthRef, grayRef, depthRefPyramid, grayRefPyramid);
 
-    std::vector<cv::Mat> grayCurPyramid;
-    std::vector<cv::Mat> depthCurPyramid;
-    buildPyramid(depthCur, grayCur, depthCurPyramid, grayCurPyramid);
+    std::vector<cv::gpu::GpuMat> grayRefGPUPyramid;
+    std::vector<cv::gpu::GpuMat> depthRefGPUPyramid;
 
-    align(depthRefPyramid, grayRefPyramid, depthCurPyramid, grayCurPyramid, pose);
+    buildPyramid(depthRef, grayRef, depthRefGPUPyramid, grayRefGPUPyramid);
+
+    std::vector<cv::gpu::GpuMat> grayCurGPUPyramid;
+    std::vector<cv::gpu::GpuMat> depthCurGPUPyramid;
+
+    buildPyramid(depthCur, grayCur, depthCurGPUPyramid, grayCurGPUPyramid);
+
+    align(depthRefGPUPyramid, grayRefGPUPyramid, depthCurGPUPyramid, grayCurGPUPyramid, pose);
 }
 
 
-void DVO::align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<cv::Mat> &grayRefPyramid,
-                const std::vector<cv::Mat> &depthCurPyramid, const std::vector<cv::Mat> &grayCurPyramid,
+void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const std::vector<cv::gpu::GpuMat> &grayRefGPUPyramid,
+                const std::vector<cv::gpu::GpuMat> &depthCurGPUPyramid, const std::vector<cv::gpu::GpuMat> &grayCurGPUPyramid,
                 Eigen::Matrix4f &pose)
 {
+    std::vector<cv::Mat> grayRefPyramid;
+    std::vector<cv::Mat> depthRefPyramid;
+    std::vector<cv::Mat> grayCurPyramid;
+    std::vector<cv::Mat> depthCurPyramid;
+
+    for(int i = 0; i < numPyramidLevels_; ++i) {
+
+        grayRefPyramid.push_back(cv::Mat(grayRefGPUPyramid[i]));
+        depthRefPyramid.push_back(cv::Mat(depthRefGPUPyramid[i]));
+
+        grayCurPyramid.push_back(cv::Mat(grayCurGPUPyramid[i]));
+        depthCurPyramid.push_back(cv::Mat(depthCurGPUPyramid[i]));
+    }
+
     Vec6f xi;
     convertTfToSE3(pose, xi);
 

@@ -11,6 +11,8 @@
 
 #include <cuda_runtime.h>
 
+#include "opencv2/gpu/gpu.hpp"
+
 
 typedef Eigen::Matrix<float, 6, 6> Mat6f;
 typedef Eigen::Matrix<float, 6, 1> Vec6f;
@@ -30,19 +32,19 @@ public:
 
     void init(int w, int h, const Eigen::Matrix3f &K);
 
-    void buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::Mat> &depthPyramid, std::vector<cv::Mat> &grayPyramid);
+    void buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::gpu::GpuMat> &depthPyramid, std::vector<cv::gpu::GpuMat> &grayPyramid);
 
     void align(const cv::Mat &depthRef, const cv::Mat &grayRef,
                const cv::Mat &depthCur, const cv::Mat &grayCur,
                Eigen::Matrix4f &pose);
 
-    void align(const std::vector<cv::Mat> &depthRefPyramid, const std::vector<cv::Mat> &grayRefPyramid,
-               const std::vector<cv::Mat> &depthCurPyramid, const std::vector<cv::Mat> &grayCurPyramid,
+    void align(const std::vector<cv::gpu::GpuMat> &depthRefPyramid, const std::vector<cv::gpu::GpuMat> &grayRefPyramid,
+               const std::vector<cv::gpu::GpuMat> &depthCurPyramid, const std::vector<cv::gpu::GpuMat> &grayCurPyramid,
                Eigen::Matrix4f &pose);
 
 private:
-    cv::Mat downsampleGray(const cv::Mat &gray);
-    cv::Mat downsampleDepth(const cv::Mat &depth);
+    cv::gpu::GpuMat downsampleGray(const cv::gpu::GpuMat &gray);
+    cv::gpu::GpuMat downsampleDepth(const cv::gpu::GpuMat &depth);
 
     void convertSE3ToTf(const Vec6f &xi, Eigen::Matrix3f &rot, Eigen::Vector3f &t);
     void convertSE3ToTf(const Vec6f &xi, Eigen::Matrix4f &pose);
