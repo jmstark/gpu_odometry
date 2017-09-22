@@ -9,6 +9,9 @@
 
 #include <opencv2/core/core.hpp>
 
+#include "strided_range.hpp"
+#include <thrust/inner_product.h>
+
 #include <cuda_runtime.h>
 
 

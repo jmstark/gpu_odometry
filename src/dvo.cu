@@ -21,6 +21,8 @@
 #include <thrust/count.h>
 
 
+#define JTR_USE_INNER_PRODUCT
+
 DVO::DVO() :
     numPyramidLevels_(5),
     useWeights_(true),
@@ -791,36 +793,15 @@ __global__ void computeJtRIntermediateResultKernel(float* out, const float* J, c
 	}
 }
 
-
-
 void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int validRows)
 {
-/*    float mean, stdDev;
-
-    // wrap raw pointer with a device_ptr
-    thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
-
-    // sum elements and divide by the number of elements
-    mean = thrust::reduce(
-        dp_residuals,
-        dp_residuals+n,
-        0.0f,
-        thrust::plus<float>()) / n;
-
-    // shift elements by mean, square, and add them
-    float variance = thrust::transform_reduce(
-    		dp_residuals,
-    		dp_residuals+n,
-            varianceshifteop(mean),
-            0.0f,
-            thrust::plus<float>());
-*/
-#if 1
     int n = 6;
     int m = validRows;
 
     float * d_J, * d_residuals, * d_intermediate;
+#ifndef JTR_USE_INNER_PRODUCT
     cudaMalloc(&d_intermediate, m * sizeof(float)); CUDA_CHECK;
+#endif
     cudaMalloc(&d_residuals, m * sizeof(float)); CUDA_CHECK;
     cudaMemcpy(d_residuals, residuals, m * sizeof(float), cudaMemcpyHostToDevice);
     cudaMalloc(&d_J, m*6*sizeof(float)); CUDA_CHECK;
@@ -836,41 +817,44 @@ void DVO::compute_JtR(const float* J, const float* residuals, Vec6f &b, int vali
     {
         //for (int i = 0; i < m; ++i)
             //val += J[i*6 + j] * residuals[i];
-    	//this loop is replaced by the following GPU code:
-    	//first element-wise multiplication into temporary memory, then summation over that.
+    	//this loop above is replaced by the following GPU code (2 alternative implementations)
 
-    	computeJtRIntermediateResultKernel<<<grid,block>>>(d_intermediate, d_J, d_residuals, m, j);
+#ifdef JTR_USE_INNER_PRODUCT
+    	//alternative 1: Using strided_range and inner_product to compute the value directly
+
+    	//wrap pointers
+        thrust::device_ptr<float> dp_J = thrust::device_pointer_cast(d_J);
+        thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast(d_residuals);
+        // create strided_range translating indices [i*6 + j] to continuous indices 0,1,2,...
+        strided_range<thrust::device_vector<float>::iterator> stridedJIterator(dp_J + j, dp_J + m*6, 6);
+        // Do the actual inner product equivalent to val += J[i*6 + j] * residuals[i];
+        float val = thrust::inner_product(dp_residuals, dp_residuals + m, stridedJIterator.begin(), 0.0f);
+#else
+
+        //alternative 2: storing intermediate results for each element and then summing them up
+
+        //step 1: compute d_intermediate[i] = J[i*6 + j] * residuals[i]
+        computeJtRIntermediateResultKernel<<<grid,block>>>(d_intermediate, d_J, d_residuals, m, j);
     	cudaDeviceSynchronize(); CUDA_CHECK;
 
-        // wrap raw pointer with a device_ptr
+        // wrap pointer
         thrust::device_ptr<float> dp_intermediate = thrust::device_pointer_cast(d_intermediate);
 
-        // sum elements
+        // step 2: sum up all elements of d_intermediate
         float val = thrust::reduce(
             dp_intermediate,
             dp_intermediate+m,
             0.0f,
             thrust::plus<float>());
+#endif
 
         b[j] = val;
     }
 
     cudaFree(d_J); CUDA_CHECK;
     cudaFree(d_residuals); CUDA_CHECK;
+#ifndef JTR_USE_INNER_PRODUCT
     cudaFree(d_intermediate); CUDA_CHECK;
-
-#else
-    int n = 6;
-    int m = validRows;
-
-    // compute b = Jt*r
-    for (int j = 0; j < n; ++j)
-    {
-        float val = 0.0f;
-        for (int i = 0; i < m; ++i)
-            val += J[i*6 + j] * residuals[i];
-        b[j] = val;
-    }
 #endif
 }
 
@@ -965,9 +949,6 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* weights, int validR
     cudaFree(d_weights);
     cudaFree(d_res);
 
-/*
-
-*/
 }
 
 __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
