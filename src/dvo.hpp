@@ -53,8 +53,8 @@ private:
 
     cv::gpu::GpuMat convertToContGpuMat(const cv::Mat &m);
 
-    void computeGradient(const cv::Mat &gray, cv::Mat &gradient, int direction);
-    float calculateError(const float* residuals, int n);
+    void computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradient, int direction);
+    float calculateError(float* residuals, int n);
     void calculateErrorImage(const float* residuals, int w, int h, cv::Mat &errorImage);
     void calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                         const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
@@ -66,8 +66,8 @@ private:
                         const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                         float* residuals);
 
-    void calculateMeanStdDev(const float* residuals, float &mean, float &stdDev, int n);
-    void computeWeights(const float* residuals, float* weights, int n);
+    void calculateMeanStdDev(float* residuals, float &mean, float &stdDev, int n);
+    void computeWeights(float* residuals, float* weights, int n);
     void applyWeights(const float* weights, float* residuals, int n);
 
     void deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
@@ -76,7 +76,7 @@ private:
                                       float* residuals, float* J);
     void deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                        const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
-                       const cv::Mat &gradX_, const cv::Mat &gradY_,
+                       const cv::gpu::GpuMat &gradX_, const cv::gpu::GpuMat &gradY_,
                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                        float* residuals, float* J);
 
@@ -89,11 +89,11 @@ private:
     bool useWeights_;
     int numIterations_;
 
-    std::vector<cv::Mat> gradX_;
-    std::vector<cv::Mat> gradY_;
+    std::vector<cv::gpu::GpuMat> gradX_;
+    std::vector<cv::gpu::GpuMat> gradY_;
     std::vector<float*> J_;
-    std::vector<float*> residuals_;
-    std::vector<float*> weights_;
+    std::vector<float*> d_residuals_;
+    std::vector<float*> d_weights_;
 
     MinimizationAlgo algo_;
 };
