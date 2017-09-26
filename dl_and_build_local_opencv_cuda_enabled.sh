@@ -11,13 +11,23 @@ DL_PATH="https://github.com/opencv/opencv/archive/"
 FOLDERNAME_UNPACKED="opencv-${DL_FILENAME}"
 
 cd ${THIRD_P_PATH}
+
+ABS_INSTALL_PATH="$(pwd)/${FOLDERNAME_UNPACKED}/${REL_INST_PATH}"
+
+
+if [ -d "${ABS_INSTALL_PATH}" ]; then 
+	echo "Found local OpenCV install ${ABS_INSTALL_PATH}" 
+	exit 0
+else
+	echo "Could not find local OpenCV install ${ABS_INSTALL_PATH}; commencing build."
+fi
+
 rm -f "${DL_FILENAME}.${DL_FILENAME_EXT}"
 rm -rf "${FOLDERNAME_UNPACKED}"
 wget "${DL_PATH}${DL_FILENAME}.${DL_FILENAME_EXT}"
 unzip -q "${DL_FILENAME}.${DL_FILENAME_EXT}"
 rm "${DL_FILENAME}.${DL_FILENAME_EXT}"
 cd "${FOLDERNAME_UNPACKED}"
-ABS_INSTALL_PATH="$(pwd)/${REL_INST_PATH}"
 mkdir $REL_BUILD_PATH
 cd $REL_BUILD_PATH
 cmake -D CMAKE_BUILD_TYPE=RELEASE -D CMAKE_INSTALL_PREFIX="${ABS_INSTALL_PATH}" \
