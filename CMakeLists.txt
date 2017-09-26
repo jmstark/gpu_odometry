@@ -21,8 +21,8 @@ FIND_PACKAGE(Eigen REQUIRED)
 INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 
 # OpenCV
-execute_process(COMMAND ./dl_and_build_local_opencv_cuda_enabled.sh WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-FIND_PACKAGE(OpenCV 2.4 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED PATHS third_party/include/opencv-2.4.13.3/local-install )
+#execute_process(COMMAND ./dl_and_build_local_opencv_cuda_enabled.sh WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+FIND_PACKAGE(OpenCV 2.4 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED PATHS /usr/prakt/s164/cudalab-deps/opencv-2.4.13.3/local-install )
 
 # CUDA
 FIND_PACKAGE(CUDA REQUIRED)
