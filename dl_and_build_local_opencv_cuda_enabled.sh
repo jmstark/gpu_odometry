@@ -30,7 +30,7 @@ rm "${DL_FILENAME}.${DL_FILENAME_EXT}"
 cd "${FOLDERNAME_UNPACKED}"
 mkdir $REL_BUILD_PATH
 cd $REL_BUILD_PATH
-cmake -D CMAKE_BUILD_TYPE=RELEASE -D CMAKE_INSTALL_PREFIX="${ABS_INSTALL_PATH}" \
+cmake -D CMAKE_BUILD_TYPE=RELEASE -DBUILD_SHARED_LIBS=OFF -D CMAKE_INSTALL_PREFIX="${ABS_INSTALL_PATH}" \
 -DBUILD_opencv_core=ON -DBUILD_opencv_flann=ON -DBUILD_opencv_imgproc=ON -DBUILD_opencv_highgui=ON \
 -DBUILD_opencv_features2d=ON -DBUILD_opencv_calib3d=ON -DBUILD_opencv_ml=ON -DBUILD_opencv_video=ON \
 -DBUILD_opencv_legacy=ON -DBUILD_opencv_objdetect=ON -DBUILD_opencv_photo=ON -DBUILD_opencv_gpu=ON \
