@@ -19,6 +19,7 @@
 
 #include <cuda_runtime.h>
 #include <thrust/count.h>
+#include <cublas_v2.h>
 
 
 DVO::DVO() :
@@ -34,9 +35,9 @@ DVO::~DVO()
 {
     for (int i = 0; i < numPyramidLevels_; ++i)
     {
-        delete[] J_[i];
+        cudaFree(d_J_[i]); CUDA_CHECK;
         cudaFree(d_residuals_[i]);CUDA_CHECK;
-        cudaFree(d_weights_[i]);
+        cudaFree(d_weights_[i]);CUDA_CHECK;
     }
 }
 
@@ -56,8 +57,9 @@ void DVO::init(int w, int h, const Eigen::Matrix3f &K)
     gradY_.push_back(gradY);
 
     // Jacobian
-    float* J = new float[n*6];
-    J_.push_back(J);
+    float* J;
+    cudaMalloc(&J,sizeof(float)*n*6);CUDA_CHECK;
+    d_J_.push_back(J);
     // residuals
     float* d_residuals;
     cudaMalloc(&d_residuals,sizeof(float)*n);CUDA_CHECK;
@@ -85,8 +87,9 @@ void DVO::init(int w, int h, const Eigen::Matrix3f &K)
         gradY_.push_back(gradYdown);
 
         // Jacobian
-        float* J = new float[n*6];
-        J_.push_back(J);
+        float* J;
+        cudaMalloc(&J,sizeof(float)*n*6);CUDA_CHECK;
+        d_J_.push_back(J);
         // residuals
         float* d_residuals;
         cudaMalloc(&d_residuals,sizeof(float)*n);CUDA_CHECK;
@@ -720,6 +723,7 @@ void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
 		1);
     computeHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
     cudaDeviceSynchronize(); CUDA_CHECK;
+
 }
 
 __global__ void applyWeightsKernel(const float* weights, float* residuals, int n)
@@ -801,7 +805,7 @@ __global__ void computeJtRIntermediateResultKernel(float* out, const float* J, c
 
 
 
-void DVO::compute_JtR(const float* J, const float* d_residuals, Vec6f &b, int validRows)
+void DVO::compute_JtR(const float* d_J, const float* d_residuals, Vec6f &b, int validRows)
 {
 /*    float mean, stdDev;
 
@@ -827,10 +831,8 @@ void DVO::compute_JtR(const float* J, const float* d_residuals, Vec6f &b, int va
     int n = 6;
     int m = validRows;
 
-    float * d_J, * d_intermediate;
+    float * d_intermediate;
     cudaMalloc(&d_intermediate, m * sizeof(float)); CUDA_CHECK;
-    cudaMalloc(&d_J, m*6*sizeof(float)); CUDA_CHECK;
-    cudaMemcpy(d_J, J, m*6*sizeof(float), cudaMemcpyHostToDevice); CUDA_CHECK;
 
 	dim3 block = dim3(128,1,1);
 	dim3 grid = dim3((m+block.x-1) / block.x,
@@ -861,7 +863,6 @@ void DVO::compute_JtR(const float* J, const float* d_residuals, Vec6f &b, int va
         b[j] = val;
     }
 
-    cudaFree(d_J); CUDA_CHECK;
     cudaFree(d_intermediate); CUDA_CHECK;
 
 #else
@@ -900,8 +901,25 @@ __global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRo
     }
 }
 
+__global__ void WJKernel(const float* d_J, const float* d_weights, int validRows, float *d_res) {
+    int m = threadIdx.x + blockDim.x*blockIdx.x;
+    int n = threadIdx.y;
 
-void DVO::compute_JtJ(const float* J, Mat6f &A, const float* d_weights, int validRows, bool useWeights)
+    //extern __shared__ float s_weights[];
+
+    /*if(m < validRows) {
+        s_weights[m] = d_weights[m];
+    }
+
+    __syncthreads();
+*/
+    if(m < validRows) {
+        d_res[n + m*6] = d_weights[m] * d_J[n + m*6];
+    }
+}
+
+
+void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int validRows, bool useWeights)
 {
 /*
     Timer t;
@@ -933,14 +951,50 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* d_weights, int vali
     int n = 6;
     int m = validRows;
 
-    float *d_J;
-    cudaMalloc(&d_J,sizeof(float)*n*m);
-    cudaMemcpy(d_J,J,sizeof(float)*n*m,cudaMemcpyHostToDevice);
-
-    float *res = new float[36];
-
     float *d_res;
     cudaMalloc(&d_res,sizeof(float)*36);
+
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+
+    float alpha = 1;
+    float beta = 0;
+
+
+    if(useWeights) {
+        float *d_WJ;
+        cudaMalloc(&d_WJ,sizeof(float)*n*m);
+
+        dim3 block = dim3(32,6,1);
+        dim3 grid = dim3( (m + block.x -1) / block.x, 1, 1);
+
+        WJKernel <<<grid, block>>> (d_J, d_weights, validRows,d_WJ);
+        cudaDeviceSynchronize(); CUDA_CHECK;
+
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, n, m, &alpha, d_J, n, d_WJ, n, &beta, d_res, n);
+        cudaFree(d_WJ);
+
+    } else {
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, n, m, &alpha, d_J, n, d_J, n, &beta, d_res, n);
+    }
+
+    // column-major
+    float *res = new float[36];
+    cudaMemcpy(res,d_res,sizeof(float)*36,cudaMemcpyDeviceToHost);
+
+    // column-major
+    for(int k = 0; k < n; k++) {
+        for(int j = 0; j < n; j++) {
+            A(j,k) = res[k + 6*j];
+        }
+    }
+
+    delete[] res;
+
+/*
+    float *res = new float[36];
+
+
 
     // we need 36 threads in total, for 36 matrix enties
     dim3 block =  dim3(32,1,1);
@@ -961,8 +1015,7 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* d_weights, int vali
 
     //t.end();
     //std::cout << "GPU: " << t.get() << std::endl;
-
-    cudaFree(d_J);
+*/
     cudaFree(d_res);
 
 }
@@ -1007,7 +1060,6 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
 	if(x<w && y<h)
 	{
 		size_t idx = x + (size_t)w*y;
-
 
 		float fx = d_K[0];
 		float fy = d_K[4];
@@ -1071,17 +1123,17 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                 }
             }
         }
+        
+
         if(!innerIfExecuted) {
         	for (int j=0;j<6;j++) {
 
-        			d_J[idx*6 + j] =  nan("");
+        			d_J[idx*6 + j] =  0.0f;
 
         	}
         }
 
-	}
-
-
+    }
 }
 
 
@@ -1089,7 +1141,7 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
                    const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                    const cv::gpu::GpuMat &gradX, const cv::gpu::GpuMat &gradY,
                    const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                   float* d_residuals, float* J)
+                   float* d_residuals, float* d_J)
 {
     // reference input images
     int w = grayRef.cols;
@@ -1101,39 +1153,15 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     Eigen::Vector3f t;
     convertSE3ToTf(xi, rotMat, t);
 
-    // calculate per-pixel residuals
 
-    //cv::gpu::GpuMat gR = convertToContGpuMat(grayRef.clone());
-    //cv::gpu::GpuMat dR = convertToContGpuMat(depthRef.clone());
-    //cv::gpu::GpuMat gC = convertToContGpuMat(grayCur.clone());
-    //cv::gpu::GpuMat dC = convertToContGpuMat(depthCur.clone());
-
-    //cv::gpu::GpuMat gR(grayRef);
-    //cv::gpu::GpuMat dR(depthRef);
-    //cv::gpu::GpuMat gC(grayCur);
-    //cv::gpu::GpuMat dC(depthCur);
-
-
-    /*std::cout << cv::Mat(gR) << std::endl;
-    std::cout << std::endl << "vs" << std::endl;
-    std::cout << grayRef << std::endl;*/
-
-
-    //calculateError(gR, dR, gC, dC, xi, K, residuals);
     calculateError(grayRef, depthRef, grayCur, depthCur, xi, K, d_residuals);
     // Using multi threading
     dim3 block =  dim3(32,32,1);
     dim3 grid = dim3((w+block.x-1)/block.x,(h+block.y-1)/block.y,1);
 
     // Allocating device memory
-    float *d_ptrDepthRef,*d_J,*d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
+    float *d_ptrDepthRef,*d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
 
-
-    float h_J[n*6];
-    for(int i=0;i<n*6;i++)
-    	h_J[i]= 0.0f;
-
-    cudaMalloc(&d_J,6*n*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_rotMat,9*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_K,9*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_t,3*sizeof(float));CUDA_CHECK;
@@ -1145,19 +1173,26 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     cudaMemcpy(d_rotMat,rotMat.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_K,K.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_t,t.data(),3*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
-    cudaMemcpy(d_J,h_J,6*n*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
 
 
     computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
     cudaDeviceSynchronize();
 
-    cudaMemcpy(J,d_J,6*n*sizeof(float),cudaMemcpyDeviceToHost);CUDA_CHECK;
-
+    float *ptr = new float[n*6];
+    cudaMemcpy(ptr, d_J, sizeof(float)*n*6,cudaMemcpyDeviceToHost);
+/*
+    for(int i = 0; i < n; i++) {
+        for(int j = 0; j < 6; j++) {
+            std::cout << ptr[i*6 +j] << " ";
+        }
+        std::cout << std::endl;
+    }
+*/
     cudaFree(d_K);CUDA_CHECK;
     cudaFree(d_rotMat);CUDA_CHECK;
-    cudaFree(d_J);CUDA_CHECK;
     cudaFree(d_t);CUDA_CHECK;
 
+/*
     // Setting previous pixel values
     int lastValidIndex = -1;
     for(int y = 0;y < h; y++)
@@ -1179,7 +1214,7 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     		}
     	}
 
-    }
+    }*/
 
 }
 
@@ -1274,7 +1309,7 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
 #if 0
             deriveNumeric(grayRef, depthRef, grayCur, depthCur, xi, kLevel, residuals_[lvl], J_[lvl]);
 #else
-            deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, d_residuals_[lvl], J_[lvl]);
+            deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, d_residuals_[lvl], d_J_[lvl]);
 #endif
 
 #if 0
@@ -1301,7 +1336,7 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
 
             // compute update
             Vec6f b;
-            compute_JtR(J_[lvl], d_residuals_[lvl], b, n);
+            compute_JtR(d_J_[lvl], d_residuals_[lvl], b, n);
 
             if (algo_ == GradientDescent)
             {
@@ -1311,14 +1346,14 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
             else if (algo_ == GaussNewton)
             {
                 // Gauss-Newton algorithm
-                compute_JtJ(J_[lvl], A, d_weights_[lvl], n, useWeights_);
+                compute_JtJ(d_J_[lvl], A, d_weights_[lvl], n, useWeights_);
                 // solve using Cholesky LDLT decomposition
                 delta = -(A.ldlt().solve(b));
             }
             else if (algo_ == LevenbergMarquardt)
             {
                 // Levenberg-Marquardt algorithm
-                compute_JtJ(J_[lvl], A, d_weights_[lvl], n, useWeights_);
+                compute_JtJ(d_J_[lvl], A, d_weights_[lvl], n, useWeights_);
                 diagMatA.diagonal() = lambda * A.diagonal();
                 delta = -((A + diagMatA).ldlt().solve(b));
             }

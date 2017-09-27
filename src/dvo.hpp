@@ -91,7 +91,7 @@ private:
 
     std::vector<cv::gpu::GpuMat> gradX_;
     std::vector<cv::gpu::GpuMat> gradY_;
-    std::vector<float*> J_;
+    std::vector<float*> d_J_;
     std::vector<float*> d_residuals_;
     std::vector<float*> d_weights_;
 
