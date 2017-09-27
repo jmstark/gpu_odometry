@@ -32,8 +32,6 @@
 #include <sstream>
 
 
-
-
 // parameter processing
 template<typename T>
 bool getParam(std::string param, T &var, int argc, char **argv)

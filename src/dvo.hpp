@@ -15,7 +15,10 @@
 #include <cuda_runtime.h>
 
 #include "opencv2/gpu/gpu.hpp"
+#include <cublas_v2.h>
 
+
+extern cublasHandle_t handle;
 
 typedef Eigen::Matrix<float, 6, 6> Mat6f;
 typedef Eigen::Matrix<float, 6, 1> Vec6f;

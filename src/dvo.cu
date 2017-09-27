@@ -805,8 +805,6 @@ __global__ void computeJtRIntermediateResultKernel(float* out, const float* J, c
 	}
 }
 
-
-
 void DVO::compute_JtR(float* d_J, const float* d_residuals, Vec6f &b, int validRows)
 {
     int n = 6;
@@ -935,9 +933,6 @@ void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int va
 
     float *d_res;
     cudaMalloc(&d_res,sizeof(float)*36);
-
-    cublasHandle_t handle;
-    cublasCreate(&handle);
 
     float alpha = 1;
     float beta = 0;
@@ -1130,73 +1125,48 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     int h = grayRef.rows;
     int n = w*h;
 
+    // camera intrinsics
+    float fx = K(0, 0);
+    float fy = K(1, 1);
+    float cx = K(0, 2);
+    float cy = K(1, 2);
+
     // convert SE3 to rotation matrix and translation vector
     Eigen::Matrix3f rotMat;
     Eigen::Vector3f t;
     convertSE3ToTf(xi, rotMat, t);
 
-
-    calculateError(grayRef, depthRef, grayCur, depthCur, xi, K, d_residuals);
-    // Using multi threading
-    dim3 block =  dim3(32,32,1);
-    dim3 grid = dim3((w+block.x-1)/block.x,(h+block.y-1)/block.y,1);
+    float* d_ptrGrayRef = (float*)grayRef.ptr();
+    float* d_ptrDepthRef = (float*)depthRef.ptr();
+    float* d_ptrGrayCur = (float*)grayCur.ptr();
+    float* d_ptrDepthCur = (float*)depthCur.ptr();
 
     // Allocating device memory
-    float *d_ptrDepthRef,*d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
+    float *d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
+
+    d_gradx = (float*) gradX.data;
+    d_grady = (float*) gradY.data;
 
     cudaMalloc(&d_rotMat,9*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_K,9*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_t,3*sizeof(float));CUDA_CHECK;
-
-    d_gradx = (float*) gradX.data;
-    d_grady = (float*) gradY.data;
-    d_ptrDepthRef = (float*) depthRef.data;
 
     cudaMemcpy(d_rotMat,rotMat.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_K,K.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_t,t.data(),3*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
 
 
-    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
+    dim3 block = dim3(32,8,1);
+    dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
+
+    cudaStream_t stream0, stream1;
+    cudaStreamCreate ( &stream0) ;
+    cudaStreamCreate ( &stream1) ;
+
+    g_residualKernel <<<grid,block,0,stream0>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_rotMat,
+                                d_t, fx, fy, cx, cy, w, h, d_residuals);
+    computeAnalyticalGradient<<<grid,block,0,stream1>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
     cudaDeviceSynchronize();
-
-    float *ptr = new float[n*6];
-    cudaMemcpy(ptr, d_J, sizeof(float)*n*6,cudaMemcpyDeviceToHost);
-/*
-    for(int i = 0; i < n; i++) {
-        for(int j = 0; j < 6; j++) {
-            std::cout << ptr[i*6 +j] << " ";
-        }
-        std::cout << std::endl;
-    }
-*/
-    cudaFree(d_K);CUDA_CHECK;
-    cudaFree(d_rotMat);CUDA_CHECK;
-    cudaFree(d_t);CUDA_CHECK;
-
-/*
-    // Setting previous pixel values
-    int lastValidIndex = -1;
-    for(int y = 0;y < h; y++)
-    {
-    	for(int x =0; x<w;x++){
-    		size_t idx = x +w*y;
-    		if(!isnan(J[idx*6])) {
-    			lastValidIndex = idx;
-    		}
-    		else
-    		{
-				if(lastValidIndex >= 0)
-					for(int k =0;k<6;k++)
-						J[idx*6 + k] = J[lastValidIndex*6+k];
-				else {
-					for(int k =0;k<6;k++)
-						J[idx*6 + k] = 0.0f;
-				}
-    		}
-    	}
-
-    }*/
 
 }
 

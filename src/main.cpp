@@ -20,10 +20,15 @@
 #define STR1(x)  #x
 #define STR(x)  STR1(x)
 
+cublasHandle_t handle;
+
+
 
 int main(int argc, char *argv[])
 {
     std::string dataFolder = std::string(STR(DVO_SOURCE_DIR)) + "/data/";
+
+    cublasCreate(&handle);
 
     Eigen::Matrix3f K;
 #if 1
