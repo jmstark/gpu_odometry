@@ -926,9 +926,9 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* d_weights, int vali
         }
     }
 
-    t.end();
+//    t.end();
 
-    std::cout << "CPU: " << t.get() << std::endl;
+//    std::cout << "CPU: " << t.get() << std::endl;
 */
     int n = 6;
     int m = validRows;
@@ -965,9 +965,6 @@ void DVO::compute_JtJ(const float* J, Mat6f &A, const float* d_weights, int vali
     cudaFree(d_J);
     cudaFree(d_res);
 
-/*
-
-*/
 }
 
 __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
