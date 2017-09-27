@@ -21,8 +21,7 @@ FIND_PACKAGE(Eigen REQUIRED)
 INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 
 # OpenCV
-#execute_process(COMMAND ./dl_and_build_local_opencv_cuda_enabled.sh WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-FIND_PACKAGE(OpenCV 2.4 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED PATHS "/usr/local/" )
+FIND_PACKAGE(OpenCV 2.4.8 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED PATHS "/usr/local/")
 
 # CUDA
 FIND_PACKAGE(CUDA REQUIRED)
@@ -43,4 +42,4 @@ FILE(GLOB srcs "src/*.cpp")
 FILE(GLOB srcscu "src/*.cu")
 
 CUDA_ADD_EXECUTABLE(dvo_gpu ${incs} ${srcs} ${srcscu})
-TARGET_LINK_LIBRARIES(dvo_gpu ${OpenCV_LIBS})
+TARGET_LINK_LIBRARIES(dvo_gpu ${OpenCV_LIBS} ${CUDA_CUBLAS_LIBRARIES})

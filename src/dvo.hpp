@@ -83,7 +83,7 @@ private:
                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                        float* residuals, float* J);
 
-    void compute_JtR(const float* J, const float* residuals, Vec6f &b, int validRows);
+    void compute_JtR(float* J, const float* residuals, Vec6f &b, int validRows);
     void compute_JtJ(const float* J, Mat6f &A, const float* weights, int validRows, bool useWeights);
 
     int numPyramidLevels_;
@@ -94,7 +94,7 @@ private:
 
     std::vector<cv::gpu::GpuMat> gradX_;
     std::vector<cv::gpu::GpuMat> gradY_;
-    std::vector<float*> J_;
+    std::vector<float*> d_J_;
     std::vector<float*> d_residuals_;
     std::vector<float*> d_weights_;
 
