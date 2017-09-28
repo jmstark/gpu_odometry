@@ -64,25 +64,16 @@ private:
 
     void computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradient, int direction);
     float calculateError(float* residuals, int n);
-    void calculateErrorImage(const float* residuals, int w, int h, cv::Mat &errorImage);
     void calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                         const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                         const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                         float* residuals);
 
-    void calculateError(const cv::Mat &grayRef, const cv::Mat &depthRef,
-                        const cv::Mat &grayCur, const cv::Mat &depthCur,
-                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                        float* residuals);
 
     void calculateMeanStdDev(float* residuals, float &mean, float &stdDev, int n);
     void computeWeights(float* residuals, float* weights, int n);
     void applyWeights(const float* weights, float* residuals, int n);
 
-    void deriveNumeric(const cv::Mat &grayRef, const cv::Mat &depthRef,
-                                      const cv::Mat &grayCur, const cv::Mat &depthCur,
-                                      const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                                      float* residuals, float* J);
     void deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                        const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                        const cv::gpu::GpuMat &gradX_, const cv::gpu::GpuMat &gradY_,
