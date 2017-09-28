@@ -1040,8 +1040,8 @@ __device__ void multiply(float *mat,float *v,float *res)
 }
 
 
-__global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float * d_rotMat, float* d_t,
-		float *d_gradx,float *d_grady,int w, int h,float *d_J)
+__global__ void computeAnalyticalGradient(float *d_K,float* d_ptrGrayRef,float* d_ptrDepthRef,float* d_ptrGrayCur,float * d_rotMat, float* d_t,
+		float *d_gradx,float *d_grady,int w, int h,float *d_J,float *d_residuals)
 {
 
 	int x = threadIdx.x + blockDim.x*blockIdx.x;
@@ -1051,6 +1051,8 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
 	if(x<w && y<h)
 	{
 		size_t idx = x + (size_t)w*y;
+
+		float residual = 0.0f;
 
 		float fx = d_K[0];
 		float fy = d_K[4];
@@ -1083,7 +1085,7 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
 
             if (pt3[2] > 0.0f)
             {
-
+            	 /*
                 // project 3d point to 2d
                 float pt2CurH[3];
                 multiply(d_K,pt3,pt2CurH);
@@ -1092,6 +1094,20 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                 float ptZinv = 1.0f / pt2CurH[2];
                 float px = pt2CurH[0] * ptZinv;
                 float py = pt2CurH[1] * ptZinv;
+            	*/
+
+            	float px = (fx * pt3[0] + cx * pt3[2]) / pt3[2];
+            	float py = (fy * pt3[1] + cy * pt3[2]) / pt3[2];
+
+                // Computing error
+
+                float valCur = d_interpolate(d_ptrGrayCur, px, py, w, h);
+			    if (!isnan(valCur))
+			    {
+				   float valRef = d_ptrGrayRef[idx];
+				   float valDiff = valRef - valCur;
+				   residual = valDiff;
+			    }
 
                 // compute interpolated image gradient
                 float dX = d_interpolate(d_gradx, px, py, w, h);
@@ -1115,7 +1131,6 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
             }
         }
 
-
         if(!innerIfExecuted) {
         	for (int j=0;j<6;j++) {
 
@@ -1124,8 +1139,11 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
         	}
         }
 
+        d_residuals[idx] = residual;
+
     }
 }
+
 
 
 void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
@@ -1139,48 +1157,42 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     int h = grayRef.rows;
     int n = w*h;
 
-    // camera intrinsics
-    float fx = K(0, 0);
-    float fy = K(1, 1);
-    float cx = K(0, 2);
-    float cy = K(1, 2);
-
     // convert SE3 to rotation matrix and translation vector
     Eigen::Matrix3f rotMat;
     Eigen::Vector3f t;
     convertSE3ToTf(xi, rotMat, t);
 
-    float* d_ptrGrayRef = (float*)grayRef.ptr();
-    float* d_ptrDepthRef = (float*)depthRef.ptr();
-    float* d_ptrGrayCur = (float*)grayCur.ptr();
-    float* d_ptrDepthCur = (float*)depthCur.ptr();
+
+    //calculateError(grayRef, depthRef, grayCur, depthCur, xi, K, d_residuals);
+    // Using multi threading
+    dim3 block =  dim3(32,32,1);
+    dim3 grid = dim3((w+block.x-1)/block.x,(h+block.y-1)/block.y,1);
 
     // Allocating device memory
     float *d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
-
-    d_gradx = (float*) gradX.data;
-    d_grady = (float*) gradY.data;
 
     cudaMalloc(&d_rotMat,9*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_K,9*sizeof(float));CUDA_CHECK;
     cudaMalloc(&d_t,3*sizeof(float));CUDA_CHECK;
 
+    d_gradx = (float*) gradX.data;
+    d_grady = (float*) gradY.data;
+
+    float* d_ptrGrayRef = (float*)grayRef.ptr();
+	float* d_ptrDepthRef = (float*)depthRef.ptr();
+	float* d_ptrGrayCur = (float*)grayCur.ptr();
+	float* d_ptrDepthCur = (float*)depthCur.ptr();
+
     cudaMemcpy(d_rotMat,rotMat.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_K,K.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_t,t.data(),3*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
 
-
-    dim3 block = dim3(32,8,1);
-    dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
-
-    cudaStream_t stream0, stream1;
-    cudaStreamCreate ( &stream0) ;
-    cudaStreamCreate ( &stream1) ;
-
-    g_residualKernel <<<grid,block,0,stream0>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_rotMat,
-                                d_t, fx, fy, cx, cy, w, h, d_residuals);
-    computeAnalyticalGradient<<<grid,block,0,stream1>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
+    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrGrayRef,d_ptrDepthRef,d_ptrGrayCur, d_rotMat,d_t,d_gradx,d_grady,w,h,d_J,d_residuals);
     cudaDeviceSynchronize();
+
+    cudaFree(d_K);CUDA_CHECK;
+    cudaFree(d_rotMat);CUDA_CHECK;
+    cudaFree(d_t);CUDA_CHECK;
 
 }
 
