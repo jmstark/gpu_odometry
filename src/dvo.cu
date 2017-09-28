@@ -275,69 +275,53 @@ cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx
 }
 
 
-__global__ void computeGradientKernel(float* out,const float* in, int w, int h,
-		int xStart, int yStart, int xEnd, int yEnd, int direction)
+__global__ void computeGradientKernel(float* outx,float *outy,const float* in, int w, int h)
 {
 	//Compute index
 	int x = threadIdx.x + blockDim.x * blockIdx.x;
 	int y = threadIdx.y + blockDim.y * blockIdx.y;
-	int z = threadIdx.z + blockDim.z * blockIdx.z;
 	//Do bounds check
 	if(x < w && y < h)
 	{
 		//if we are out of the specified range but still inside the frame, we need to set
 		//the pixel anyway (analog to pre-initialization in the sequential code)
-		out[y*w + x] = 0.0f;
-	}
-	if(xStart <= x && x < xEnd && yStart <= y && y < yEnd && z < 1)
-	{
-        float v0;
-        float v1;
-        if (direction == 1)
-        {
-            // y-direction
-            v0 = in[(y-1)*w + x];
-            v1 = in[(y+1)*w + x];
-        }
-        else
-        {
-            // x-direction
-            v0 = in[y*w + (x-1)];
-            v1 = in[y*w + (x+1)];
-        }
-        out[y*w + x] = 0.5f * (v1 - v0);
+		outx[y*w + x] = 0.0f;
+		outy[y*w + x] = 0.0f;
 
+		float v0 = 0.0f;
+		float v1 = 0.0f;
+
+		// Along y direction
+		if((y-1)>=0 && (y+1)<h){
+			v0 = in[(y-1)*w + x];
+		    v1 = in[(y+1)*w + x];
+		    outy[y*w + x] = 0.5f * (v1 - v0);
+		}
+		// Along x direction
+		if((x-1)>=0 && (x+1)<w) {
+			v0 = in[y*w + (x-1)];
+		    v1 = in[y*w + (x+1)];
+		    outx[y*w + x] = 0.5f * (v1 - v0);
+		}
 	}
+
 }
 
 
-void DVO::computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradient, int direction)
+void DVO::computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradientx, cv::gpu::GpuMat &gradienty)
 {
-    int dirX = 1;
-    int dirY = 0;
-    if (direction == 1)
-    {
-        dirX = 0;
-        dirY = 1;
-    }
 
     // compute gradient manually using finite differences
     int w = gray.cols;
     int h = gray.rows;
     const float* d_ptrIn = (const float*)gray.data;
-    gradient.setTo(0);
-    float* d_ptrOut = (float*)gradient.data;
-
-    int yStart = dirY;
-    int yEnd = h - dirY;
-    int xStart = dirX;
-    int xEnd = w - dirX;
-
+    gradientx.setTo(0);
+    gradienty.setTo(0);
+    float* d_ptrOutx = (float*)gradientx.data;
+    float* d_ptrOuty = (float*)gradienty.data;
     dim3 block = dim3(64,8,1);
-    dim3 grid = dim3((w+1+block.x-1) / block.x,
-		(h+1+block.y - 1) / block.y,
-		1);
-    computeGradientKernel<<<grid,block>>>(d_ptrOut, d_ptrIn, w, h, xStart, yStart, xEnd, yEnd, direction);
+    dim3 grid = dim3((w+1+block.x) / block.x,(h+block.y) / block.y,1);
+    computeGradientKernel<<<grid,block>>>(d_ptrOutx,d_ptrOuty, d_ptrIn, w, h);
     cudaDeviceSynchronize(); CUDA_CHECK;
 }
 
@@ -782,21 +766,6 @@ __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
 
 }
 
-__device__ void multiply(float *mat,float *v,float *res)
-{
-	for(int i = 0;i<3;i++)
-	{
-		float sum = 0.f;
-		for(int j = 0;j<3;j++)
-		{
-			sum += mat[i+3*j]*v[j];
-		}
-		res[i] = sum;
-	}
-
-}
-
-
 __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrGrayRef,float* d_ptrDepthRef,float* d_ptrGrayCur,float * d_rotMat, float* d_t,
 		float *d_gradx,float *d_grady,int w, int h,float *d_J,float *d_residuals)
 {
@@ -1032,8 +1001,8 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
         //std::cout << "level " << level << " (size " << depthRef.cols << "x" << depthRef.rows << ")" << std::endl;
 
         // compute gradient images
-        computeGradient(grayCur, gradX_[lvl], 0);
-        computeGradient(grayCur, gradY_[lvl], 1);
+        computeGradient(grayCur, gradX_[lvl],gradY_[lvl]);
+        //computeGradient(grayCur, gradY_[lvl], 1);
 
         float errorLast = std::numeric_limits<float>::max();
         for (int itr = 0; itr < numIterations_; ++itr)
