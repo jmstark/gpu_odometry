@@ -62,7 +62,7 @@ private:
 
     cv::gpu::GpuMat convertToContGpuMat(const cv::Mat &m);
 
-    void computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradient, int direction);
+    void computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradientx,cv::gpu::GpuMat &gradienty);
     float calculateError(float* residuals, int n);
     void calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                         const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
