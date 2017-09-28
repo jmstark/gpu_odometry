@@ -25,7 +25,6 @@
 #include <thrust/execution_policy.h>
 
 
-#define JTR_USE_INNER_PRODUCT
 
 DVO::DVO() :
     numPyramidLevels_(5),
@@ -33,6 +32,8 @@ DVO::DVO() :
     numIterations_(500),
     algo_(GaussNewton)
 {
+	for(int i=0;i<NUM_STREAMS;i++)
+		cudaStreamCreate(&streams[i]);
 }
 
 
@@ -44,6 +45,8 @@ DVO::~DVO()
         cudaFree(d_residuals_[i]);CUDA_CHECK;
         cudaFree(d_weights_[i]);CUDA_CHECK;
     }
+	for(int i=0;i<NUM_STREAMS;i++)
+		cudaStreamDestroy(streams[i]);
 }
 
 

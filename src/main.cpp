@@ -129,6 +129,7 @@ int main(int argc, char *argv[])
 
     // clean up
     cv::destroyAllWindows();
+    cublasDestroy(handle);
     std::cout << "Direct Image Alignment finished." << std::endl;
     return 0;
 }

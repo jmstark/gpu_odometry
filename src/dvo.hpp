@@ -17,6 +17,7 @@
 #include "opencv2/gpu/gpu.hpp"
 #include <cublas_v2.h>
 
+#define NUM_STREAMS 8
 
 extern cublasHandle_t handle;
 
@@ -49,6 +50,8 @@ public:
                Eigen::Matrix4f &pose);
 
 private:
+    cudaStream_t streams[NUM_STREAMS];
+
     cv::gpu::GpuMat downsampleGray(const cv::gpu::GpuMat &gray);
     cv::gpu::GpuMat downsampleDepth(const cv::gpu::GpuMat &depth);
 
