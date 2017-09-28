@@ -173,7 +173,7 @@ __global__ void downsampleGrayKernel(float* out, int w, int h, float* in)
 }
 
 
-cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray)
+cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray, int streamIdx)
 {
 	float * d_in, * d_out;
     int w = gray.cols;
@@ -189,7 +189,7 @@ cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray)
     dim3 grid = dim3((w+block.x-1) / block.x,
 		(h+block.y - 1) / block.y,
 		1);
-    downsampleGrayKernel<<<grid,block>>>(d_out, w, h, d_in);
+    downsampleGrayKernel<<<grid,block,0,streams[streamIdx]>>>(d_out, w, h, d_in);
     cudaDeviceSynchronize(); CUDA_CHECK;
 
     return grayDown;
@@ -250,7 +250,7 @@ __global__ void downsampleDepthKernel(float* out, int w, int h, float* in)
 }
 
 
-cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth)
+cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx)
 {
 
     float * d_in, * d_out;
@@ -267,7 +267,7 @@ cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth)
     dim3 grid = dim3((w+block.x-1) / block.x,
 		(h+block.y - 1) / block.y,
 		1);
-    downsampleDepthKernel<<<grid,block>>>(d_out, w, h, d_in);
+    downsampleDepthKernel<<<grid,block,0,streams[streamIdx]>>>(d_out, w, h, d_in);
     cudaDeviceSynchronize(); CUDA_CHECK;
 
     return depthDown;
@@ -1213,11 +1213,12 @@ void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv
     for (int i = 1; i < numPyramidLevels_; ++i)
     {
         // downsample grayscale image
-        cv::gpu::GpuMat grayDown = downsampleGray(grayPyramid[i-1]);
-        grayPyramid.push_back(grayDown);
-
+        cv::gpu::GpuMat grayDown = downsampleGray(grayPyramid[i-1], 0);
         // downsample depth image
-        cv::gpu::GpuMat depthDown = downsampleDepth(depthPyramid[i-1]);
+        cv::gpu::GpuMat depthDown = downsampleDepth(depthPyramid[i-1], 1);
+        cudaDeviceSynchronize(); CUDA_CHECK;
+
+        grayPyramid.push_back(grayDown);
         depthPyramid.push_back(depthDown);
 
     }

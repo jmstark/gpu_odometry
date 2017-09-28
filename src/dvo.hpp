@@ -52,8 +52,8 @@ public:
 private:
     cudaStream_t streams[NUM_STREAMS];
 
-    cv::gpu::GpuMat downsampleGray(const cv::gpu::GpuMat &gray);
-    cv::gpu::GpuMat downsampleDepth(const cv::gpu::GpuMat &depth);
+    cv::gpu::GpuMat downsampleGray(const cv::gpu::GpuMat &gray, int streamIdx);
+    cv::gpu::GpuMat downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx);
 
     void convertSE3ToTf(const Vec6f &xi, Eigen::Matrix3f &rot, Eigen::Vector3f &t);
     void convertSE3ToTf(const Vec6f &xi, Eigen::Matrix4f &pose);
