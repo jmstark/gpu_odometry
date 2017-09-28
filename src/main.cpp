@@ -22,8 +22,6 @@
 
 cublasHandle_t handle;
 
-
-
 int main(int argc, char *argv[])
 {
     std::string dataFolder = std::string(STR(DVO_SOURCE_DIR)) + "/data/";

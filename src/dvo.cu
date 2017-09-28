@@ -21,6 +21,9 @@
 #include <thrust/count.h>
 #include <cublas_v2.h>
 
+#include <math.h>
+#include <thrust/execution_policy.h>
+
 
 #define JTR_USE_INNER_PRODUCT
 
@@ -807,77 +810,49 @@ __global__ void computeJtRIntermediateResultKernel(float* out, const float* J, c
 
 void DVO::compute_JtR(float* d_J, const float* d_residuals, Vec6f &b, int validRows)
 {
+
     int n = 6;
     int m = validRows;
 
-    float * d_intermediate;
-    cudaMalloc(&d_intermediate, m * sizeof(float)); CUDA_CHECK;
+    float alpha = 1;
+    float beta = 0;
 
-	dim3 block = dim3(128,1,1);
-	dim3 grid = dim3((m+block.x-1) / block.x,
-		1,
-		1);
+    float *d_y;
+    cudaMalloc(&d_y,sizeof(float)*6);
 
-    // compute b = Jt*r
-    for (int j = 0; j < n; ++j)
-    {
-        //for (int i = 0; i < m; ++i)
-            //val += J[i*6 + j] * residuals[i];
-    	//this loop above is replaced by the following GPU code (2 alternative implementations)
+    cublasSgemv(handle,CUBLAS_OP_N,n,m,&alpha,d_J,n,d_residuals,1,&beta,d_y,1);
 
-#ifdef JTR_USE_INNER_PRODUCT
-    	//alternative 1: Using strided_range and inner_product to compute the value directly
+    float *res = new float[6];
+    cudaMemcpy(res,d_y,sizeof(float)*6,cudaMemcpyDeviceToHost);
 
-    	//wrap pointers
-        thrust::device_ptr<float> dp_J = thrust::device_pointer_cast(d_J);
-        thrust::device_ptr<float> dp_residuals = thrust::device_pointer_cast((float*)d_residuals);
-        // create strided_range translating indices [i*6 + j] to continuous indices 0,1,2,...
-        strided_range<thrust::device_vector<float>::iterator> stridedJIterator(dp_J + j, dp_J + m*6, 6);
-        // Do the actual inner product equivalent to val += J[i*6 + j] * residuals[i];
-        float val = thrust::inner_product(dp_residuals, dp_residuals + m, stridedJIterator.begin(), 0.0f);
-#else
-
-        //alternative 2: storing intermediate results for each element and then summing them up
-
-        //step 1: compute d_intermediate[i] = J[i*6 + j] * residuals[i]
-        computeJtRIntermediateResultKernel<<<grid,block>>>(d_intermediate, d_J, d_residuals, m, j);
-    	cudaDeviceSynchronize(); CUDA_CHECK;
-
-        // wrap pointer
-        thrust::device_ptr<float> dp_intermediate = thrust::device_pointer_cast(d_intermediate);
-
-        // step 2: sum up all elements of d_intermediate
-        float val = thrust::reduce(
-            dp_intermediate,
-            dp_intermediate+m,
-            0.0f,
-            thrust::plus<float>());
-#endif
-
-        b[j] = val;
+    for(int i = 0; i < 6; i++) {
+        b[i] = res[i];
     }
 
-    cudaFree(d_intermediate); CUDA_CHECK;
+    delete[] res;
+    cudaFree(d_y);
+
 }
 
 __global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRows, bool useWeights, float *d_res) {
 
-    int idx = threadIdx.x + blockDim.x*blockIdx.x;
+    int i = threadIdx.x + blockDim.x*blockIdx.x;
+    int m = blockIdx.y;
 
-    if(idx < 36) {
-        int j = idx/6;
-        int k = idx % 6;
-        float sum = 0;
+    int n = 6;
+
+    int k = floor( ( 2.0f*n+1 - sqrtf( (2.0f*n+1.0f)*(2.0f*n+1.0f) - 8.0f*m ) ) / 2.0f ) ;
+    int j = k + (m - n*k + k*(k-1)/2) ;
+
+
+    if(i < validRows) {
+
         float valSqr;
-        for(int i = 0; i < validRows; i++) {
-    	   valSqr = d_J[i*6 + j] * d_J[i*6 + k];
-    	   if (useWeights)
-    	       valSqr *= d_weights[i];
+    	valSqr = d_J[i*6 + j] * d_J[i*6 + k];
+    	if (useWeights)
+    	   valSqr *= d_weights[i];
 
-    	   sum += valSqr;
-       }
-
-        d_res[idx] = sum;
+        d_res[i + m*validRows] = valSqr;
     }
 }
 
@@ -901,16 +876,74 @@ __global__ void WJKernel(const float* d_J, const float* d_weights, int validRows
 
 void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int validRows, bool useWeights)
 {
-/*
-    Timer t;
-    t.start();
+    /*
     int n = 6;
     int m = validRows;
+
+    dim3 block = dim3(128,1,1);
+    // matrix A has 21 unique elements due to symmetry
+	dim3 grid = dim3((m+block.x-1) / block.x,21,1);
+
+    float *d_res;
+    cudaMalloc(&d_res, sizeof(float)*21*m);CUDA_CHECK;
+    thrust::device_ptr<float> dp_res = thrust::device_pointer_cast(d_res);
+
+
+    JtJKernel <<<grid,block>>>(d_J, d_weights, validRows, useWeights, d_res);
+
+    cudaStream_t stream0;
+    cudaStreamCreate ( &stream0) ;
+
+    //float *res = new float[36];
+
+    //cudaMemcpy(res,d_res,sizeof(float)*36,cudaMemcpyDeviceToHost);
+
+    // column-major
+
+    /*float *res = new float[21*m];
+    cudaMemcpy(res,d_res,sizeof(float)*21*m,cudaMemcpyDeviceToHost);
+    ///////
+    cudaDeviceSynchronize();
+
+    for(int i = 0; i < 21; i++) {
+        if(i % 2 == 0) {
+            thrust::cuda::par.on(stream0);
+        } else {
+            thrust::cuda::par.on(0);
+        }
+
+        float val = thrust::reduce(
+            dp_res + i*m,
+            dp_res +i*m +m,
+            0.0f,
+            thrust::plus<float>());
+        /*float val;
+        for(int l = 0; l < m; l++) {
+            val += res[i*m +l];
+        }
+        int k = floor( ( 2.0f*n+1 - sqrtf( (2.0f*n+1.0f)*(2.0f*n+1.0f) - 8.0f*i ) ) / 2.0f ) ;
+        int j = k + (i - n*k + k*(k-1)/2) ;
+
+        A(j,k) = val;
+        A(k,j) = val;
+    }
+    //delete[] res;
+    cudaFree(d_res);
+*/
+/*
+    int n = 6;
+    int m = validRows;
+
+    float *J = new float[n*m];
+    cudaMemcpy(J,d_J, sizeof(float)*n*m, cudaMemcpyDeviceToHost);
+
+    float *weights = new float[m];
+    cudaMemcpy(weights,d_weights, sizeof(float)*m, cudaMemcpyDeviceToHost);
 
     // compute A = Jt*J
     for (int k = 0; k < n; ++k)
     {
-        for (int j = 0; j < n; ++j)
+        for (int j = k; j < n; ++j)
         {
             float val = 0.0f;
             for (int i = 0; i < m; ++i)
@@ -921,10 +954,15 @@ void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int va
                 val += valSqr;
             }
             A(k, j) = val;
+            A(j,k) = val;
         }
     }
 
+    delete[] J;
+    delete[] weights;
+
 //    t.end();
+
 
 //    std::cout << "CPU: " << t.get() << std::endl;
 */
@@ -946,9 +984,10 @@ void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int va
         dim3 grid = dim3( (m + block.x -1) / block.x, 1, 1);
 
         WJKernel <<<grid, block>>> (d_J, d_weights, validRows,d_WJ);
-        cudaDeviceSynchronize(); CUDA_CHECK;
+        //cudaDeviceSynchronize(); CUDA_CHECK;
 
-        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, n, m, &alpha, d_J, n, d_WJ, n, &beta, d_res, n);
+        //cublasSdgmm(handle, CUBLAS_SIDE_RIGHT, n,m, d_J, n, d_weights, 0, d_WJ, n);
+        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, n, m, &alpha, d_WJ, n, d_J, n, &beta, d_res, n);
         cudaFree(d_WJ);
 
     } else {
@@ -967,33 +1006,8 @@ void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int va
     }
 
     delete[] res;
-
-/*
-    float *res = new float[36];
-
-
-
-    // we need 36 threads in total, for 36 matrix enties
-    dim3 block =  dim3(32,1,1);
-    dim3 grid = dim3(2,1,1);
-
-    //Timer t;
-    //t.start();
-
-    JtJKernel <<<grid,block>>> (d_J, d_weights, validRows, useWeights, d_res);
-    cudaDeviceSynchronize();
-    cudaMemcpy(res,d_res,sizeof(float)*36,cudaMemcpyDeviceToHost);
-
-    for(int k = 0; k < n; k++) {
-        for(int j = 0; j < n; j++) {
-            A(k,j) = res[k + 6*j];
-        }
-    }
-
-    //t.end();
-    //std::cout << "GPU: " << t.get() << std::endl;
-*/
     cudaFree(d_res);
+
 
 }
 
