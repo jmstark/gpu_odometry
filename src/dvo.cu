@@ -535,7 +535,7 @@ void DVO::calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
 }
 
 
-__global__ void computeHuberWeightsKernel(float* weights, const float* residuals, int n, float k)
+__global__ void computeAndApplyHuberWeightsKernel(float* weights, float* residuals, int n, float k)
 {
 	//Compute index
 	int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -552,6 +552,9 @@ __global__ void computeHuberWeightsKernel(float* weights, const float* residuals
         else
             w = k / std::abs(residuals[i]);
         weights[i] = w;
+
+        //apply weights
+        residuals[i] = residuals[i] * weights[i];
 	}
 }
 
@@ -574,7 +577,7 @@ struct varianceshifteop
 
 
 
-void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
+void DVO::computeAndApplyWeights(float* d_residuals, float* d_weights, int n)
 {
 #if 0
     // no weighting
@@ -617,11 +620,11 @@ void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
     dim3 grid = dim3((n+block.x-1) / block.x,
 		1,
 		1);
-    computeHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
+    computeAndApplyHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
     cudaDeviceSynchronize(); CUDA_CHECK;
 
 }
-
+/*
 __global__ void applyWeightsKernel(const float* weights, float* residuals, int n)
 {
 	//Compute index
@@ -648,7 +651,7 @@ void DVO::applyWeights(const float* d_weights, float* d_residuals, int n)
     cudaDeviceSynchronize(); CUDA_CHECK;
 
 }
-
+*/
 
 __global__ void computeJtRIntermediateResultKernel(float* out, const float* J, const float* residuals, int m, int j)
 {
@@ -1137,10 +1140,8 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
             float error = calculateError(d_residuals_[lvl], n);
             if (useWeights_)
             {
-                // compute robust weights
-                computeWeights(d_residuals_[lvl], d_weights_[lvl], n);
-                // apply robust weights
-                applyWeights(d_weights_[lvl], d_residuals_[lvl], n);
+                // compute and apply robust weights
+                computeAndApplyWeights(d_residuals_[lvl], d_weights_[lvl], n);
             }
 
             // compute update

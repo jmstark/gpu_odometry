@@ -71,7 +71,7 @@ private:
 
 
     void calculateMeanStdDev(float* residuals, float &mean, float &stdDev, int n);
-    void computeWeights(float* residuals, float* weights, int n);
+    void computeAndApplyWeights(float* residuals, float* weights, int n);
     void applyWeights(const float* weights, float* residuals, int n);
 
     void deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
