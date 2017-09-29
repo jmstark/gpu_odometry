@@ -24,6 +24,9 @@
 #include <math.h>
 #include <thrust/execution_policy.h>
 
+__constant__ float d_t[3];
+__constant__ float d_K[9];
+__constant__ float d_rotMat[9];
 
 
 DVO::DVO() :
@@ -422,8 +425,6 @@ __host__ __device__ float d_interpolate(const float* ptrImgIntensity, float x, f
 __global__ void g_residualKernel(const float* d_ptrGrayRef,
                             const float* d_ptrDepthRef,
                             const float* d_ptrGrayCur,
-                            const float* d_ptrRotation,
-                            const float* d_ptrTranslation,
                             float fx, float fy, float cx, float cy, int w,int h,
                             float* d_residuals)
 {
@@ -452,12 +453,12 @@ __global__ void g_residualKernel(const float* d_ptrGrayRef,
             float z0 = homo * dRef;
 
             // rotate and translate; Eigen uses column-major
-            float x1 = d_ptrRotation[0] * x0 + d_ptrRotation[3] * y0 +
-                        d_ptrRotation[6] * z0 + d_ptrTranslation[0];
-            float y1 = d_ptrRotation[1] * x0 + d_ptrRotation[4] * y0 +
-                        d_ptrRotation[7] * z0 + d_ptrTranslation[1];
-            float z1 = d_ptrRotation[2] * x0 + d_ptrRotation[5] * y0 +
-                        d_ptrRotation[8] * z0 + d_ptrTranslation[2];
+            float x1 = d_rotMat[0] * x0 + d_rotMat[3] * y0 +
+                        d_rotMat[6] * z0 + d_t[0];
+            float y1 = d_rotMat[1] * x0 + d_rotMat[4] * y0 +
+                        d_rotMat[7] * z0 + d_t[1];
+            float z1 = d_rotMat[2] * x0 + d_rotMat[5] * y0 +
+                        d_rotMat[8] * z0 + d_t[2];
 
             if(z1 > 0.0f) {
                 // project onto 2nd frame
@@ -511,27 +512,15 @@ void DVO::calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     float* d_ptrGrayCur = (float*)grayCur.ptr();
     float* d_ptrDepthCur = (float*)depthCur.ptr();
 
-    float* d_ptrRotation;
-    cudaMalloc(&d_ptrRotation, 9*sizeof(float)); CUDA_CHECK;
-    cudaMemcpy(d_ptrRotation, rotMat.data(), 9*sizeof(float), cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpyToSymbol(d_rotMat, rotMat.data(), 9);CUDA_CHECK;
 
-    float* d_ptrTranslation;
-    cudaMalloc(&d_ptrTranslation, 3*sizeof(float));CUDA_CHECK;
-    cudaMemcpy(d_ptrTranslation, t.data(), 3*sizeof(float), cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpyToSymbol(d_t, t.data(), 3);CUDA_CHECK;
 
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
-    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_ptrRotation,
-                                d_ptrTranslation, fx, fy, cx, cy, w, h, d_residuals);
+    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur,
+    		fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
-
-
-    cudaFree(d_ptrRotation);CUDA_CHECK;
-    cudaFree(d_ptrTranslation);CUDA_CHECK;
-    //cudaFree(d_residuals);CUDA_CHECK;
-    //cudaUnbindTexture(texGrayCur);
-
-
 }
 
 
@@ -884,7 +873,7 @@ __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
 }
 
 
-__global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float * d_rotMat, float* d_t,
+__global__ void computeAnalyticalGradient(float* d_ptrDepthRef,
 		float *d_gradx,float *d_grady,int w, int h, float* d_residuals, float* d_weights, float *d_Jr, float *d_Ai)
 {
 
@@ -1047,18 +1036,14 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     float* d_ptrDepthCur = (float*)depthCur.ptr();
 
     // Allocating device memory
-    float *d_gradx,*d_grady,*d_t,*d_K,*d_rotMat;
+    float *d_gradx,*d_grady;
 
     d_gradx = (float*) gradX.data;
     d_grady = (float*) gradY.data;
 
-    cudaMalloc(&d_rotMat,9*sizeof(float));CUDA_CHECK;
-    cudaMalloc(&d_K,9*sizeof(float));CUDA_CHECK;
-    cudaMalloc(&d_t,3*sizeof(float));CUDA_CHECK;
-
-    cudaMemcpy(d_rotMat,rotMat.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
-    cudaMemcpy(d_K,K.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
-    cudaMemcpy(d_t,t.data(),3*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
+    cudaMemcpyToSymbol(d_rotMat,rotMat.data(),9*sizeof(float));CUDA_CHECK;
+    cudaMemcpyToSymbol(d_K,K.data(),9*sizeof(float));CUDA_CHECK;
+    cudaMemcpyToSymbol(d_t,t.data(),3*sizeof(float));CUDA_CHECK;
 
     float *d_Ai;
     cudaMalloc(&d_Ai, sizeof(float)*36*n);
@@ -1066,17 +1051,15 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
 
-
-    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_rotMat,
-                                d_t, fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
+    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur,
+                                fx, fy, cx, cy, w, h, d_residuals);
 
     computeAndApplyWeights(d_residuals, d_weights, n); // W
 
     // d_J = Jt W r
     // d_Ai = A for every pixel
-    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h, d_residuals, d_weights,d_J, d_Ai);
-    cudaDeviceSynchronize();
+    computeAnalyticalGradient<<<grid,block>>>(d_ptrDepthRef,d_gradx,d_grady,w,h, d_residuals, d_weights,d_J, d_Ai);
 
     //thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
 
