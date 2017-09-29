@@ -761,6 +761,26 @@ struct A_reduce :  public thrust::binary_function<pixelA,pixelA,pixelA>
 
 };
 
+struct pixelb
+{
+    float b[6];
+};
+
+struct b_reduce :  public thrust::binary_function<pixelb,pixelb,pixelb>
+{
+        __device__ pixelb operator()(pixelb bi, pixelb bj) const
+        {
+            struct pixelb res;
+            for(int i = 0; i < 6; i++) {
+                res.b[i] = bi.b[i] + bj.b[i];
+            }
+
+            return res;
+        }
+
+};
+
+
 
 void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                    const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
@@ -823,6 +843,7 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     computeAnalyticalGradient<<<grid,block>>>(d_ptrDepthRef,d_gradx,d_grady,w,h, d_residuals, useWeights, d_weights,d_J, d_Ai);
 
     thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
+    thrust::device_ptr<struct pixelb> dp_bs = thrust::device_pointer_cast((struct pixelb *)d_J);
 
     //TODO reduce
 
@@ -831,41 +852,32 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
         neutralA.a[i] = 0.0f;
     }
 
+    struct pixelb neutralb;
+    for(int i = 0; i < 6; i++) {
+        neutralb.b[i] = 0.0f;
+    }
+
+
     struct pixelA resA = thrust::reduce(
                 dp_As,
                 dp_As+n,
                 neutralA,
                 A_reduce());
 
+    struct pixelb resb = thrust::reduce(
+            dp_bs,
+            dp_bs+n,
+            neutralb,
+            b_reduce());
+
     for(int i = 0; i < 6; i++) {
+        b[i] = resb.b[i];
         for(int j = 0; j < 6; j++) {
             A(i,j) = resA.a[i*6+j];
         }
     }
-    //float *temp = new float[n*36];
-    float *temp2 = new float[n*6];
-    //cudaMemcpy(temp,d_Ai,sizeof(float)*36*n,cudaMemcpyDeviceToHost);
-    cudaMemcpy(temp2,d_J,sizeof(float)*n*6,cudaMemcpyDeviceToHost);
-
-    for(int i = 0; i < n; i++) {
-        for(int j = 0; j < 6; j++) {
-            b[j] += temp2[i*6+j];
-        }
-    }
-
-    /*for(int i = 0; i < n*36; i+=36) {
-        for(int k = 0; k < 6; k++) {
-            for(int j = 0; j < 6; j++) {
-                A(k,j) += temp[i + k*6 +j];
-            }
-        }
-    }*/
-
-    //std::cout << A <<std::endl << std::endl;
 
     cudaFree(d_Ai);
-    //delete[] temp;
-    delete[] temp2;
 }
 
 
