@@ -535,7 +535,7 @@ void DVO::calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
 }
 
 
-__global__ void computeAndApplyHuberWeightsKernel(float* weights, float* residuals, int n, float k)
+__global__ void computeHuberWeightsKernel(float* weights, float* residuals, int n, float k)
 {
 	//Compute index
 	int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -577,7 +577,7 @@ struct varianceshifteop
 
 
 
-void DVO::computeAndApplyWeights(float* d_residuals, float* d_weights, int n)
+void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
 {
 #if 0
     // no weighting
@@ -620,252 +620,8 @@ void DVO::computeAndApplyWeights(float* d_residuals, float* d_weights, int n)
     dim3 grid = dim3((n+block.x-1) / block.x,
 		1,
 		1);
-    computeAndApplyHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
+    computeHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
     cudaDeviceSynchronize(); CUDA_CHECK;
-
-}
-/*
-__global__ void applyWeightsKernel(const float* weights, float* residuals, int n)
-{
-	//Compute index
-	int x = threadIdx.x + blockDim.x * blockIdx.x;
-	int y = threadIdx.y + blockDim.y * blockIdx.y;
-	int z = threadIdx.z + blockDim.z * blockIdx.z;
-	int i = x;
-	//Do bounds check
-	if(i<n && y < 1 && z < 1)
-	{
-		residuals[i] = residuals[i] * weights[i];
-	}
-}
-
-
-void DVO::applyWeights(const float* d_weights, float* d_residuals, int n)
-{
-
-    dim3 block = dim3(512,1,1);
-    dim3 grid = dim3((n+block.x-1) / block.x,
-		1,
-		1);
-    applyWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n);
-    cudaDeviceSynchronize(); CUDA_CHECK;
-
-}
-*/
-
-__global__ void computeJtRIntermediateResultKernel(float* out, const float* J, const float* residuals, int m, int j)
-{
-	//Compute index
-	int x = threadIdx.x + blockDim.x * blockIdx.x;
-	int y = threadIdx.y + blockDim.y * blockIdx.y;
-	int z = threadIdx.z + blockDim.z * blockIdx.z;
-	int i = x;
-	if(i<m && y < 1 && z < 1)
-	{
-		out[i] = J[i*6 + j] * residuals[i];
-	}
-}
-
-void DVO::compute_JtR(float* d_J, const float* d_residuals, Vec6f &b, int validRows)
-{
-
-    int n = 6;
-    int m = validRows;
-
-    float alpha = 1;
-    float beta = 0;
-
-    float *d_y;
-    cudaMalloc(&d_y,sizeof(float)*6);
-
-    cublasSgemv(handle,CUBLAS_OP_N,n,m,&alpha,d_J,n,d_residuals,1,&beta,d_y,1);
-
-    float *res = new float[6];
-    cudaMemcpy(res,d_y,sizeof(float)*6,cudaMemcpyDeviceToHost);
-
-    for(int i = 0; i < 6; i++) {
-        b[i] = res[i];
-    }
-
-    delete[] res;
-    cudaFree(d_y);
-
-}
-
-__global__ void JtJKernel(const float* d_J,  const float* d_weights, int validRows, bool useWeights, float *d_res) {
-
-    int i = threadIdx.x + blockDim.x*blockIdx.x;
-    int m = blockIdx.y;
-
-    int n = 6;
-
-    int k = floor( ( 2.0f*n+1 - sqrtf( (2.0f*n+1.0f)*(2.0f*n+1.0f) - 8.0f*m ) ) / 2.0f ) ;
-    int j = k + (m - n*k + k*(k-1)/2) ;
-
-
-    if(i < validRows) {
-
-        float valSqr;
-    	valSqr = d_J[i*6 + j] * d_J[i*6 + k];
-    	if (useWeights)
-    	   valSqr *= d_weights[i];
-
-        d_res[i + m*validRows] = valSqr;
-    }
-}
-
-__global__ void WJKernel(const float* d_J, const float* d_weights, int validRows, float *d_res) {
-    int m = threadIdx.x + blockDim.x*blockIdx.x;
-    int n = threadIdx.y;
-
-    //extern __shared__ float s_weights[];
-
-    /*if(m < validRows) {
-        s_weights[m] = d_weights[m];
-    }
-
-    __syncthreads();
-*/
-    if(m < validRows) {
-        d_res[n + m*6] = d_weights[m] * d_J[n + m*6];
-    }
-}
-
-
-void DVO::compute_JtJ(const float* d_J, Mat6f &A, const float* d_weights, int validRows, bool useWeights)
-{
-    /*
-    int n = 6;
-    int m = validRows;
-
-    dim3 block = dim3(128,1,1);
-    // matrix A has 21 unique elements due to symmetry
-	dim3 grid = dim3((m+block.x-1) / block.x,21,1);
-
-    float *d_res;
-    cudaMalloc(&d_res, sizeof(float)*21*m);CUDA_CHECK;
-    thrust::device_ptr<float> dp_res = thrust::device_pointer_cast(d_res);
-
-
-    JtJKernel <<<grid,block>>>(d_J, d_weights, validRows, useWeights, d_res);
-
-    cudaStream_t stream0;
-    cudaStreamCreate ( &stream0) ;
-
-    //float *res = new float[36];
-
-    //cudaMemcpy(res,d_res,sizeof(float)*36,cudaMemcpyDeviceToHost);
-
-    // column-major
-
-    /*float *res = new float[21*m];
-    cudaMemcpy(res,d_res,sizeof(float)*21*m,cudaMemcpyDeviceToHost);
-    ///////
-    cudaDeviceSynchronize();
-
-    for(int i = 0; i < 21; i++) {
-        if(i % 2 == 0) {
-            thrust::cuda::par.on(stream0);
-        } else {
-            thrust::cuda::par.on(0);
-        }
-
-        float val = thrust::reduce(
-            dp_res + i*m,
-            dp_res +i*m +m,
-            0.0f,
-            thrust::plus<float>());
-        /*float val;
-        for(int l = 0; l < m; l++) {
-            val += res[i*m +l];
-        }
-        int k = floor( ( 2.0f*n+1 - sqrtf( (2.0f*n+1.0f)*(2.0f*n+1.0f) - 8.0f*i ) ) / 2.0f ) ;
-        int j = k + (i - n*k + k*(k-1)/2) ;
-
-        A(j,k) = val;
-        A(k,j) = val;
-    }
-    //delete[] res;
-    cudaFree(d_res);
-*/
-/*
-    int n = 6;
-    int m = validRows;
-
-    float *J = new float[n*m];
-    cudaMemcpy(J,d_J, sizeof(float)*n*m, cudaMemcpyDeviceToHost);
-
-    float *weights = new float[m];
-    cudaMemcpy(weights,d_weights, sizeof(float)*m, cudaMemcpyDeviceToHost);
-
-    // compute A = Jt*J
-    for (int k = 0; k < n; ++k)
-    {
-        for (int j = k; j < n; ++j)
-        {
-            float val = 0.0f;
-            for (int i = 0; i < m; ++i)
-            {
-                float valSqr = J[i*6 + j] * J[i*6 + k];
-                if (useWeights)
-                    valSqr *= weights[i];
-                val += valSqr;
-            }
-            A(k, j) = val;
-            A(j,k) = val;
-        }
-    }
-
-    delete[] J;
-    delete[] weights;
-
-//    t.end();
-
-
-//    std::cout << "CPU: " << t.get() << std::endl;
-*/
-    int n = 6;
-    int m = validRows;
-
-    float *d_res;
-    cudaMalloc(&d_res,sizeof(float)*36);
-
-    float alpha = 1;
-    float beta = 0;
-
-
-    if(useWeights) {
-        float *d_WJ;
-        cudaMalloc(&d_WJ,sizeof(float)*n*m);
-
-        dim3 block = dim3(32,6,1);
-        dim3 grid = dim3( (m + block.x -1) / block.x, 1, 1);
-
-        WJKernel <<<grid, block>>> (d_J, d_weights, validRows,d_WJ);
-        //cudaDeviceSynchronize(); CUDA_CHECK;
-
-        //cublasSdgmm(handle, CUBLAS_SIDE_RIGHT, n,m, d_J, n, d_weights, 0, d_WJ, n);
-        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, n, m, &alpha, d_WJ, n, d_J, n, &beta, d_res, n);
-        cudaFree(d_WJ);
-
-    } else {
-        cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, n, m, &alpha, d_J, n, d_J, n, &beta, d_res, n);
-    }
-
-    // column-major
-    float *res = new float[36];
-    cudaMemcpy(res,d_res,sizeof(float)*36,cudaMemcpyDeviceToHost);
-
-    // column-major
-    for(int k = 0; k < n; k++) {
-        for(int j = 0; j < n; j++) {
-            A(j,k) = res[k + 6*j];
-        }
-    }
-
-    delete[] res;
-    cudaFree(d_res);
-
 
 }
 
@@ -885,7 +641,7 @@ __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
 
 
 __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float * d_rotMat, float* d_t,
-		float *d_gradx,float *d_grady,int w, int h, float* d_residuals, float* d_weights, float *d_Jr, float *d_Ai)
+		float *d_gradx,float *d_grady,int w, int h, float* d_residuals, bool useWeights, float* d_weights, float *d_Jr, float *d_Ai)
 {
 
 	int x = threadIdx.x + blockDim.x*blockIdx.x;
@@ -953,6 +709,10 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                     float pt3Zinv = 1.0f / pt3[2];
 
                     float J[6];
+                    float weight = 1.0f;
+
+                    if(useWeights)
+                        weight = d_weights[idx];
 
                     // shorter computation
                     J[0] = (-1.0f*dX * pt3Zinv);
@@ -962,16 +722,16 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                     J[4] = (- dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) - (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv);
                     J[5] = (-1.0f*(- dX * pt3[1] + dY * pt3[0]) * pt3Zinv);
 
-                   	d_Jr[idx*6 + 0] = J[0] * d_weights[idx]*d_residuals[idx];
-		            d_Jr[idx*6 + 1] = J[1] * d_weights[idx]*d_residuals[idx];
-		            d_Jr[idx*6 + 2] = J[2] * d_weights[idx]*d_residuals[idx];
-		            d_Jr[idx*6 + 3] = J[3] * d_weights[idx]*d_residuals[idx];
-		            d_Jr[idx*6 + 4] = J[4] * d_weights[idx]*d_residuals[idx];
-		            d_Jr[idx*6 + 5] = J[5] * d_weights[idx]*d_residuals[idx];
+                   	d_Jr[idx*6 + 0] = J[0] * weight*d_residuals[idx];
+		            d_Jr[idx*6 + 1] = J[1] * weight*d_residuals[idx];
+		            d_Jr[idx*6 + 2] = J[2] * weight*d_residuals[idx];
+		            d_Jr[idx*6 + 3] = J[3] * weight*d_residuals[idx];
+		            d_Jr[idx*6 + 4] = J[4] * weight*d_residuals[idx];
+		            d_Jr[idx*6 + 5] = J[5] * weight*d_residuals[idx];
 
                     for(int i = 0; i < 6; i++) {
                         for(int j = i; j < 6; j++) {
-                            float val = J[i] * J[j] * d_weights[idx];
+                            float val = J[i] * J[j] * weight;
                             d_Ai[idx*36 + j + i*6] = val;
                             d_Ai[idx*36 + i + j*6] = val;
                         }
@@ -1017,7 +777,7 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
                    const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                    const cv::gpu::GpuMat &gradX, const cv::gpu::GpuMat &gradY,
                    const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                   float* d_residuals, float* d_weights, float* d_J, Mat6f &A, Vec6f &b)
+                   float* d_residuals, bool useWeights, float* d_weights, float* d_J, Mat6f &A, Vec6f &b)
 {
     for(int i = 0; i < 6; i++) {
         b[i] = 0.0f;
@@ -1071,11 +831,12 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
                                 d_t, fx, fy, cx, cy, w, h, d_residuals);
     cudaDeviceSynchronize();
 
-    computeAndApplyWeights(d_residuals, d_weights, n); // W
+    if(useWeights)
+        computeWeights(d_residuals, d_weights, n); // W
 
     // d_J = Jt W r
     // d_Ai = A for every pixel
-    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h, d_residuals, d_weights,d_J, d_Ai);
+    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h, d_residuals, useWeights, d_weights,d_J, d_Ai);
     cudaDeviceSynchronize();
 
     //thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
@@ -1213,7 +974,7 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
 #if 0
             deriveNumeric(grayRef, depthRef, grayCur, depthCur, xi, kLevel, residuals_[lvl], J_[lvl]);
 #else
-            deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, d_residuals_[lvl], d_weights_[lvl], d_J_[lvl], A,b);
+            deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, d_residuals_[lvl], useWeights_, d_weights_[lvl], d_J_[lvl], A,b);
 #endif
 
 #if 0

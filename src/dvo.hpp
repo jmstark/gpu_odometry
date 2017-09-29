@@ -71,17 +71,14 @@ private:
 
 
     void calculateMeanStdDev(float* residuals, float &mean, float &stdDev, int n);
-    void computeAndApplyWeights(float* residuals, float* weights, int n);
-    void applyWeights(const float* weights, float* residuals, int n);
+    void computeWeights(float* residuals, float* weights, int n);
 
     void deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                        const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                        const cv::gpu::GpuMat &gradX_, const cv::gpu::GpuMat &gradY_,
                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                       float* d_residuals, float* d_weights, float* d_J, Mat6f &A, Vec6f &b);
+                       float* d_residuals, bool useWeight, float* d_weights, float* d_J, Mat6f &A, Vec6f &b);
 
-    void compute_JtR(float* J, const float* residuals, Vec6f &b, int validRows);
-    void compute_JtJ(const float* J, Mat6f &A, const float* weights, int validRows, bool useWeights);
 
     int numPyramidLevels_;
     std::vector<Eigen::Matrix3f> kPyramid_;
