@@ -822,11 +822,11 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     // d_Ai = A for every pixel
     computeAnalyticalGradient<<<grid,block>>>(d_ptrDepthRef,d_gradx,d_grady,w,h, d_residuals, useWeights, d_weights,d_J, d_Ai);
 
-    //thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
+    thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
 
     //TODO reduce
 
-    /*struct pixelA neutralA;
+    struct pixelA neutralA;
     for(int i = 0; i < 36; i++) {
         neutralA.a[i] = 0.0f;
     }
@@ -837,14 +837,14 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
                 neutralA,
                 A_reduce());
 
-    /*for(int i = 0; i < 6; i++) {
+    for(int i = 0; i < 6; i++) {
         for(int j = 0; j < 6; j++) {
             A(i,j) = resA.a[i*6+j];
         }
-    }**/
-    float *temp = new float[n*36];
+    }
+    //float *temp = new float[n*36];
     float *temp2 = new float[n*6];
-    cudaMemcpy(temp,d_Ai,sizeof(float)*36*n,cudaMemcpyDeviceToHost);
+    //cudaMemcpy(temp,d_Ai,sizeof(float)*36*n,cudaMemcpyDeviceToHost);
     cudaMemcpy(temp2,d_J,sizeof(float)*n*6,cudaMemcpyDeviceToHost);
 
     for(int i = 0; i < n; i++) {
@@ -853,16 +853,18 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
         }
     }
 
-    for(int i = 0; i < n*36; i+=36) {
+    /*for(int i = 0; i < n*36; i+=36) {
         for(int k = 0; k < 6; k++) {
             for(int j = 0; j < 6; j++) {
                 A(k,j) += temp[i + k*6 +j];
             }
         }
-    }
+    }*/
+
+    //std::cout << A <<std::endl << std::endl;
 
     cudaFree(d_Ai);
-    delete[] temp;
+    //delete[] temp;
     delete[] temp2;
 }
 
