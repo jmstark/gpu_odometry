@@ -1249,8 +1249,6 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
                 // Gauss-Newton algorithm
                 //compute_JtJ(d_J_[lvl], A, d_weights_[lvl], n, useWeights_);
                 // solve using Cholesky LDLT decomposition
-                std::cout << A << std::endl;
-                std::cout << b << std::endl;
                 delta = -(A.ldlt().solve(b));
             }
             else if (algo_ == LevenbergMarquardt)
