@@ -78,7 +78,7 @@ private:
                        const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                        const cv::gpu::GpuMat &gradX_, const cv::gpu::GpuMat &gradY_,
                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                       float* residuals, float* J);
+                       float* d_residuals, float* d_weights, float* d_J, Mat6f &A);
 
     void compute_JtR(float* J, const float* residuals, Vec6f &b, int validRows);
     void compute_JtJ(const float* J, Mat6f &A, const float* weights, int validRows, bool useWeights);

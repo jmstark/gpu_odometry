@@ -554,7 +554,7 @@ __global__ void computeAndApplyHuberWeightsKernel(float* weights, float* residua
         weights[i] = w;
 
         //apply weights
-        residuals[i] = residuals[i] * weights[i];
+        //residuals[i] = residuals[i] * weights[i];
 	}
 }
 
@@ -885,7 +885,7 @@ __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
 
 
 __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float * d_rotMat, float* d_t,
-		float *d_gradx,float *d_grady,int w, int h,float *d_J)
+		float *d_gradx,float *d_grady,int w, int h, float* d_residuals, float* d_weights, float *d_Jr, float *d_Ai)
 {
 
 	int x = threadIdx.x + blockDim.x*blockIdx.x;
@@ -952,13 +952,30 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
                     dY = fy * dY;
                     float pt3Zinv = 1.0f / pt3[2];
 
+                    float J[6];
+
                     // shorter computation
-                   		d_J[idx*6 + 0] = -1.0f*dX * pt3Zinv;
-		                d_J[idx*6 + 1] = -1.0f*dY * pt3Zinv;
-		                d_J[idx*6 + 2] = (dX * pt3[0] + dY * pt3[1]) * pt3Zinv * pt3Zinv;
-		                d_J[idx*6 + 3] = (dX * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv + dY * (1 + (pt3[1] * pt3Zinv) * (pt3[1] * pt3Zinv));
-		                d_J[idx*6 + 4] = - dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) - (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv;
-		                d_J[idx*6 + 5] = -1.0f*(- dX * pt3[1] + dY * pt3[0]) * pt3Zinv;
+                    J[0] = (-1.0f*dX * pt3Zinv);
+                    J[1] = (-1.0f*dY * pt3Zinv);
+                    J[2] = ((dX * pt3[0] + dY * pt3[1]) * pt3Zinv * pt3Zinv);
+                    J[3] = ((dX * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv + dY * (1 + (pt3[1] * pt3Zinv) * (pt3[1] * pt3Zinv)));
+                    J[4] = (- dX * (1.0 + (pt3[0] * pt3Zinv) * (pt3[0] * pt3Zinv)) - (dY * pt3[0] * pt3[1]) * pt3Zinv * pt3Zinv);
+                    J[5] = (-1.0f*(- dX * pt3[1] + dY * pt3[0]));
+
+                   	d_Jr[idx*6 + 0] = J[0] * d_weights[idx]*d_residuals[idx];
+		            d_Jr[idx*6 + 1] = J[1] * d_weights[idx]*d_residuals[idx];
+		            d_Jr[idx*6 + 2] = J[2] * d_weights[idx]*d_residuals[idx];
+		            d_Jr[idx*6 + 3] = J[3] * d_weights[idx]*d_residuals[idx];
+		            d_Jr[idx*6 + 4] = J[4] * d_weights[idx]*d_residuals[idx];
+		            d_Jr[idx*6 + 5] = J[5] * d_weights[idx]*d_residuals[idx];
+
+                    for(int i = 0; i < 6; i++) {
+                        for(int j = i; j < 6; j++) {
+                            float val = J[i] * J[j] * d_weights[idx];
+                            d_Ai[idx*36 + j + i*6] = val;
+                            d_Ai[idx*36 + i + j*6] = val;
+                        }
+                    }
                 }
             }
         }
@@ -966,21 +983,40 @@ __global__ void computeAnalyticalGradient(float *d_K,float* d_ptrDepthRef,float 
 
         if(!innerIfExecuted) {
         	for (int j=0;j<6;j++) {
-
-        			d_J[idx*6 + j] =  0.0f;
-
+        			d_Jr[idx*6 + j] =  0.0f;
+                    for(int i=0;i<6;i++) {
+                        d_Ai[idx*36 + j +i*6] = 0.0f;
+                    }
         	}
         }
 
     }
 }
 
+struct pixelA
+{
+  float a[36];
+};
+
+struct A_reduce :  public thrust::binary_function<pixelA,pixelA,pixelA>
+{
+        __device__ pixelA operator()(pixelA Ai, pixelA Aj) const
+        {
+            struct pixelA res;
+            for(int i = 0; i < 36; i++) {
+                res.a[i] = Ai.a[i] + Aj.a[i];
+            }
+
+            return res;
+        }
+};
+
 
 void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
                    const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
                    const cv::gpu::GpuMat &gradX, const cv::gpu::GpuMat &gradY,
                    const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
-                   float* d_residuals, float* d_J)
+                   float* d_residuals, float* d_weights, float* d_J, Mat6f &A)
 {
     // reference input images
     int w = grayRef.cols;
@@ -1017,19 +1053,46 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     cudaMemcpy(d_K,K.data(),9*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
     cudaMemcpy(d_t,t.data(),3*sizeof(float),cudaMemcpyHostToDevice);CUDA_CHECK;
 
+    float *d_Ai;
+    cudaMalloc(&d_Ai, sizeof(float)*36*n);
 
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
 
-    cudaStream_t stream0, stream1;
-    cudaStreamCreate ( &stream0) ;
-    cudaStreamCreate ( &stream1) ;
 
-    g_residualKernel <<<grid,block,0,stream0>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_rotMat,
+    g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur, d_rotMat,
                                 d_t, fx, fy, cx, cy, w, h, d_residuals);
-    computeAnalyticalGradient<<<grid,block,0,stream1>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h,d_J);
     cudaDeviceSynchronize();
 
+    computeAndApplyWeights(d_residuals, d_weights, n); // W
+
+    // d_J = Jt W r
+    // d_Ai = A for every pixel
+    computeAnalyticalGradient<<<grid,block>>>(d_K,d_ptrDepthRef,d_rotMat,d_t,d_gradx,d_grady,w,h, d_residuals, d_weights,d_J, d_Ai);
+    cudaDeviceSynchronize();
+
+    thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
+
+    //TODO reduce
+
+    struct pixelA neutralA;
+    for(int i = 0; i < 36; i++) {
+        neutralA.a[i] = 0.0f;
+    }
+
+    struct pixelA resA = thrust::reduce(
+                dp_As,
+                dp_As+n,
+                neutralA,
+                A_reduce());
+
+    for(int i = 0; i < 6; i++) {
+        for(int j = 0; j < 6; j++) {
+            A(i,j) = resA.a[i*6+j];
+        }
+    }
+
+    cudaFree(d_Ai);
 }
 
 
@@ -1121,7 +1184,7 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
 #if 0
             deriveNumeric(grayRef, depthRef, grayCur, depthCur, xi, kLevel, residuals_[lvl], J_[lvl]);
 #else
-            deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, d_residuals_[lvl], d_J_[lvl]);
+            deriveAnalytic(grayRef, depthRef, grayCur, depthCur, gradX_[lvl], gradY_[lvl], xi, kLevel, d_residuals_[lvl], d_weights_[lvl], d_J_[lvl], A);
 #endif
 
 #if 0
@@ -1138,15 +1201,15 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
 
             // calculate error
             float error = calculateError(d_residuals_[lvl], n);
-            if (useWeights_)
+            /*if (useWeights_)
             {
                 // compute and apply robust weights
                 computeAndApplyWeights(d_residuals_[lvl], d_weights_[lvl], n);
-            }
+            }*/
 
             // compute update
             Vec6f b;
-            compute_JtR(d_J_[lvl], d_residuals_[lvl], b, n);
+            //compute_JtR(d_J_[lvl], d_residuals_[lvl], b, n);
 
             if (algo_ == GradientDescent)
             {
