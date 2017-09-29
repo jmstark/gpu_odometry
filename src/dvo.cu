@@ -672,16 +672,6 @@ __global__ void computeAnalyticalGradient(float* d_ptrDepthRef,
 
             if (pt3[2] > 0.0f)
             {
-/*
-                // project 3d point to 2d
-                float pt2CurH[3];
-                multiply(d_K,pt3,pt2CurH);
-            	//Eigen::Vector3f pt2CurH = K * pt3;
-
-                float ptZinv = 1.0f / pt2CurH[2];
-                float px = pt2CurH[0] * ptZinv;
-                float py = pt2CurH[1] * ptZinv;
-                */
 
                 float px = (fx * pt3[0] + cx * pt3[2]) / pt3[2];
                 float py = (fy * pt3[1] + cy * pt3[2]) / pt3[2];
@@ -718,12 +708,16 @@ __global__ void computeAnalyticalGradient(float* d_ptrDepthRef,
 		            d_Jr[idx*6 + 4] = J[4] * weight*d_residuals[idx];
 		            d_Jr[idx*6 + 5] = J[5] * weight*d_residuals[idx];
 
-                    for(int i = 0; i < 6; i++) {
-                        for(int j = i; j < 6; j++) {
-                            float val = J[i] * J[j] * weight;
-                            d_Ai[idx*36 + j + i*6] = val;
-                            d_Ai[idx*36 + i + j*6] = val;
-                        }
+                    int i;
+                    int j;
+                    // from linear index to 2d matrix index
+                    for(int k = 0; k < 21; k++) {
+                        //line
+                        i = floor( ( 2.0f*6+1 - sqrtf( (2.0f*6+1.0f)*(2.0f*6+1.0f) - 8.0f*k ) ) / 2.0f );
+                        //column
+                        j = i + (k - 6*i + i*(i-1)/2);
+
+                        d_Ai[idx*21 + k] = J[i] * J[j] * weight;
                     }
                 }
             }
@@ -733,10 +727,10 @@ __global__ void computeAnalyticalGradient(float* d_ptrDepthRef,
         if(!innerIfExecuted) {
         	for (int j=0;j<6;j++) {
         			d_Jr[idx*6 + j] =  0.0f;
-                    for(int i=0;i<6;i++) {
-                        d_Ai[idx*36 + j +i*6] = 0.0f;
-                    }
         	}
+            for (int i=0; i < 21; i++) {
+                d_Ai[idx*21+i] = 0.0f;
+            }
         }
 
     }
@@ -744,7 +738,8 @@ __global__ void computeAnalyticalGradient(float* d_ptrDepthRef,
 
 struct pixelA
 {
-  float a[36];
+  // A is 6x6 symmetric, therefore, 21 unique elements
+  float a[21];
 };
 
 struct A_reduce :  public thrust::binary_function<pixelA,pixelA,pixelA>
@@ -752,7 +747,7 @@ struct A_reduce :  public thrust::binary_function<pixelA,pixelA,pixelA>
         __device__ pixelA operator()(pixelA Ai, pixelA Aj) const
         {
             struct pixelA res;
-            for(int i = 0; i < 36; i++) {
+            for(int i = 0; i < 21; i++) {
                 res.a[i] = Ai.a[i] + Aj.a[i];
             }
 
@@ -826,7 +821,7 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     cudaMemcpyToSymbol(d_t,t.data(),3*sizeof(float));CUDA_CHECK;
 
     float *d_Ai;
-    cudaMalloc(&d_Ai, sizeof(float)*36*n);
+    cudaMalloc(&d_Ai, sizeof(float)*21*n);
 
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
@@ -848,7 +843,7 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     //TODO reduce
 
     struct pixelA neutralA;
-    for(int i = 0; i < 36; i++) {
+    for(int i = 0; i < 21; i++) {
         neutralA.a[i] = 0.0f;
     }
 
@@ -872,9 +867,14 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
 
     for(int i = 0; i < 6; i++) {
         b[i] = resb.b[i];
-        for(int j = 0; j < 6; j++) {
-            A(i,j) = resA.a[i*6+j];
-        }
+    }
+
+    for(int k = 0; k < 21; k++) {
+        int i = floor( ( 2.0f*6+1 - sqrtf( (2.0f*6+1.0f)*(2.0f*6+1.0f) - 8.0f*k ) ) / 2.0f );
+        int j = i + (k - 6*i + i*(i-1)/2);
+
+        A(i,j) = resA.a[k];
+        A(j,i) = resA.a[k];
     }
 
     cudaFree(d_Ai);
