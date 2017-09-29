@@ -193,7 +193,6 @@ cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray, int streamIdx)
 		(h+block.y - 1) / block.y,
 		1);
     downsampleGrayKernel<<<grid,block,0,streams[streamIdx]>>>(d_out, w, h, d_in);
-    cudaDeviceSynchronize(); CUDA_CHECK;
 
     return grayDown;
 }
@@ -271,7 +270,6 @@ cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx
 		(h+block.y - 1) / block.y,
 		1);
     downsampleDepthKernel<<<grid,block,0,streams[streamIdx]>>>(d_out, w, h, d_in);
-    cudaDeviceSynchronize(); CUDA_CHECK;
 
     return depthDown;
 
@@ -325,7 +323,6 @@ void DVO::computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradient
     dim3 block = dim3(64,8,1);
     dim3 grid = dim3((w+1+block.x) / block.x,(h+block.y) / block.y,1);
     computeGradientKernel<<<grid,block>>>(d_ptrOutx,d_ptrOuty, d_ptrIn, w, h);
-    cudaDeviceSynchronize(); CUDA_CHECK;
 }
 
 
@@ -520,7 +517,6 @@ void DVO::calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
     g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur,
     		fx, fy, cx, cy, w, h, d_residuals);
-    cudaDeviceSynchronize();
 }
 
 
@@ -610,7 +606,6 @@ void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
 		1,
 		1);
     computeHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
-    cudaDeviceSynchronize(); CUDA_CHECK;
 
 }
 
@@ -826,7 +821,6 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
     dim3 block = dim3(32,8,1);
     dim3 grid = dim3( (w + block.x -1) / block.x, (h+block.y -1) / block.y, 1);
 
-    cudaDeviceSynchronize();
     g_residualKernel <<<grid,block>>> (d_ptrGrayRef, d_ptrDepthRef, d_ptrGrayCur,
                                 fx, fy, cx, cy, w, h, d_residuals);
 
@@ -839,8 +833,6 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
 
     thrust::device_ptr<struct pixelA> dp_As = thrust::device_pointer_cast((struct pixelA *)d_Ai);
     thrust::device_ptr<struct pixelb> dp_bs = thrust::device_pointer_cast((struct pixelb *)d_J);
-
-    //TODO reduce
 
     struct pixelA neutralA;
     for(int i = 0; i < 21; i++) {
