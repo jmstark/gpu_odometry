@@ -24,6 +24,10 @@
 #include <math.h>
 #include <thrust/execution_policy.h>
 
+//#define HUBER
+//#define STUDENT_T
+#define CAUCHY
+
 __constant__ float d_t[3];
 __constant__ float d_K[9];
 __constant__ float d_rotMat[9];
@@ -543,7 +547,37 @@ __global__ void computeHuberWeightsKernel(float* weights, float* residuals, int 
 	}
 }
 
+__global__ void computeStudentTWeightsKernel(float* weights, float* residuals, int n, int v,float sigma)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	//Do bounds check
+	if(i<n && y < 1 && z < 1)
+	{
+		//compute robust Student T weights
+        weights[i] = (1.0f*(v+1))/((1.0f*v)+powf(residuals[i]/sigma,2.0f));
+	}
+}
 
+
+
+__global__ void computeCauchyWeightsKernel(float* weights, float* residuals, int n)
+{
+	//Compute index
+	int x = threadIdx.x + blockDim.x * blockIdx.x;
+	int y = threadIdx.y + blockDim.y * blockIdx.y;
+	int z = threadIdx.z + blockDim.z * blockIdx.z;
+	int i = x;
+	//Do bounds check
+	if(i<n && y < 1 && z < 1)
+	{
+		//compute robust Cauchy weights
+        weights[i] = -2.0f/(1+residuals[i]*residuals[i]);
+	}
+}
 
 struct varianceshifteop
     : std::unary_function<float, float>
@@ -560,7 +594,21 @@ struct varianceshifteop
     }
 };
 
+struct irls
+    : std::unary_function<float, float>
+{
+    irls(float s_,float v_)
+        : sd(s_),v(v_)
+    { /* no-op */ }
 
+    const float sd;
+    const float v;
+
+    __device__ float operator()(float data) const
+    {
+    	return (data*data)*((v+1)/(v + powf(data/sd,2)));
+    }
+};
 
 void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
 {
@@ -598,16 +646,47 @@ void DVO::computeWeights(float* d_residuals, float* d_weights, int n)
 
     // standard dev is just a sqrt away
     stdDev = std::sqrt(variance);
-
+    
+    // Parameters for huber distribution
     float k = 1.345f * stdDev;
+    
+    // Parameters for student t distribution 
+#ifdef STUDENT_T    
+    int v = 5;
+    float sd = stdDev;
+    float oldSd;
+    do
+    {	oldSd = sd;
+    	sd = thrust::transform_reduce(
+    						dp_residuals,
+    						dp_residuals+n,
+    						irls(oldSd,v),
+    						0.0f,
+    						thrust::plus<float>());
+	} while( std::abs(sd-oldSd) > 0.001f);
+#endif 
+    
 
     dim3 block = dim3(512,1,1);
     dim3 grid = dim3((n+block.x-1) / block.x,
 		1,
 		1);
+    //huber
+#ifdef HUBER
     computeHuberWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, k);
+#endif
 
+	// student t 
+#ifdef STUDENT_T
+	computeStudentTWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n, v,sd);
+#endif
+
+	//Cauchy
+#ifdef CAUCHY
+	computeCauchyWeightsKernel<<<grid,block>>>(d_weights, d_residuals, n);
+#endif
 }
+
 
 __device__ void rotateAndTranslate(float *rot,float *t, float *v, float *res)
 {
