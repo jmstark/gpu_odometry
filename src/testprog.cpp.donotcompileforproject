@@ -73,14 +73,13 @@ static float getMaxDisparity( VideoCapture& capture )
 
 int main()
 {
-	VideoCapture capture( CAP_OPENNI2_ASUS );
+    // CAP_OPENNI2_ASUS driver does not support grabbing bgr-images (Image generator), while this one does
+	VideoCapture capture( CAP_OPENNI2 );
 	if( !capture.isOpened() )
     {
         std::cout << "***** Can not open a capture object." << std::endl;
         return -1;
     }
-    capture.set(CAP_PROP_OPENNI_REGISTRATION,CAP_PROP_OPENNI_REGISTRATION_ON);
-    //capture.set(CAP_OPENNI_DEPTH_GENERATOR_REGISTRATION,10000000.0f);
     // Print some avalible device settings.
     if (capture.get(CAP_OPENNI_DEPTH_GENERATOR_PRESENT))
     {
@@ -90,7 +89,7 @@ int main()
             "FRAME_MAX_DEPTH  " << capture.get(CAP_PROP_OPENNI_FRAME_MAX_DEPTH) << " mm" << std::endl <<
             "FPS              " << capture.get(CAP_PROP_FPS) << std::endl <<
             "REGISTRATION     " << capture.get(CAP_PROP_OPENNI_REGISTRATION) << std::endl <<
-            "REG2             " << capture.get(CAP_OPENNI_DEPTH_GENERATOR_REGISTRATION) << std::endl;
+            "IMG_GEN          " << capture.get(CAP_OPENNI_IMAGE_GENERATOR_PRESENT) << std::endl;
     }
     else
     {
@@ -98,15 +97,16 @@ int main()
     }
 	for(;;)
 	{
-	    Mat disparityMap;
-	    capture >> disparityMap;
-	    Mat colorDisparityMap;
-        colorizeDisparity( disparityMap, colorDisparityMap, -1 );
-        Mat validColorDisparityMap;
-        colorDisparityMap.copyTo( validColorDisparityMap, disparityMap != 0 );
-	    imshow( "depth map", validColorDisparityMap );
-	    if( waitKey( 30 ) >= 0 )
-	        break;
+    Mat depthMap;
+    Mat bgrImage;
+    capture.grab();
+    capture.retrieve( depthMap, CAP_OPENNI_DEPTH_MAP );
+    capture.retrieve( bgrImage, CAP_OPENNI_BGR_IMAGE );
+    imshow( "depth map", depthMap );
+    imshow( "bgr image", bgrImage );
+
+    if( waitKey( 30 ) >= 0 )
+        break;
 	}
 	return 0;
 } 
