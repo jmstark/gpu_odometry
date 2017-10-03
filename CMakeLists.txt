@@ -21,7 +21,9 @@ FIND_PACKAGE(Eigen REQUIRED)
 INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 
 # OpenCV
-FIND_PACKAGE(OpenCV 2.4.8 COMPONENTS opencv_core opencv_highgui opencv_imgproc REQUIRED PATHS "/usr/local/")
+SET(OpenCV_DIR "/home/josef/cudalab-deps/opencv-3.3.0/local-install/share/OpenCV")
+FIND_PACKAGE(OpenCV REQUIRED)
+include_directories(${OpenCV_INCLUDE_DIRS})
 
 # CUDA
 FIND_PACKAGE(CUDA REQUIRED)
@@ -32,7 +34,7 @@ option(CUDA_USE_STATIC_CUDA_RUNTIME "Use the static version of the CUDA runtime 
 #==============================================================================
 
 SET(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -O1 -funroll-loops -D_FORCE_INLINES -DCUDA_USE_STATIC_CUDA_RUNTIME=OFF" )
-SET(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --profile -lineinfo")
+#SET(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} --profile -lineinfo")
 
 # preprocessor define: source directory
 ADD_DEFINITIONS(-DDVO_SOURCE_DIR=${PROJECT_SOURCE_DIR})
