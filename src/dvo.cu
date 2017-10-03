@@ -24,9 +24,9 @@
 #include <math.h>
 #include <thrust/execution_policy.h>
 
-//#define HUBER
+#define HUBER
 //#define STUDENT_T
-#define CAUCHY
+//#define CAUCHY
 
 __constant__ float d_t[3];
 __constant__ float d_K[9];
@@ -66,9 +66,9 @@ void DVO::init(int w, int h, const Eigen::Matrix3f &K)
     sizePyramid_.push_back(cv::Size(wDown, hDown));
 
     // gradients
-    cv::gpu::GpuMat gradX = cv::gpu::createContinuous(h, w, CV_32FC1);
+    cv::cuda::GpuMat gradX = cv::cuda::createContinuous(h, w, CV_32FC1);
     gradX_.push_back(gradX);
-    cv::gpu::GpuMat gradY = cv::gpu::createContinuous(h, w, CV_32FC1);
+    cv::cuda::GpuMat gradY = cv::cuda::createContinuous(h, w, CV_32FC1);
     gradY_.push_back(gradY);
 
     // Jacobian
@@ -96,9 +96,9 @@ void DVO::init(int w, int h, const Eigen::Matrix3f &K)
         sizePyramid_.push_back(cv::Size(wDown, hDown));
 
         // gradients
-        cv::gpu::GpuMat gradXdown = cv::gpu::createContinuous(hDown, wDown, CV_32FC1);
+        cv::cuda::GpuMat gradXdown = cv::cuda::createContinuous(hDown, wDown, CV_32FC1);
         gradX_.push_back(gradXdown);
-        cv::gpu::GpuMat gradYdown = cv::gpu::createContinuous(hDown, wDown, CV_32FC1);
+        cv::cuda::GpuMat gradYdown = cv::cuda::createContinuous(hDown, wDown, CV_32FC1);
         gradY_.push_back(gradYdown);
 
         // Jacobian
@@ -180,7 +180,7 @@ __global__ void downsampleGrayKernel(float* out, int w, int h, float* in)
 }
 
 
-cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray, int streamIdx)
+cv::cuda::GpuMat DVO::downsampleGray(const cv::cuda::GpuMat &gray, int streamIdx)
 {
 	float * d_in, * d_out;
     int w = gray.cols;
@@ -189,7 +189,7 @@ cv::gpu::GpuMat DVO::downsampleGray(const cv::gpu::GpuMat &gray, int streamIdx)
     int hDown = h/2;
     d_in = (float*)gray.data;
 
-    cv::gpu::GpuMat grayDown = cv::gpu::createContinuous(hDown,wDown,gray.type());
+    cv::cuda::GpuMat grayDown = cv::cuda::createContinuous(hDown,wDown,gray.type());
     d_out = (float*)grayDown.data;
 
     dim3 block = dim3(64,8,1);
@@ -256,7 +256,7 @@ __global__ void downsampleDepthKernel(float* out, int w, int h, float* in)
 }
 
 
-cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx)
+cv::cuda::GpuMat DVO::downsampleDepth(const cv::cuda::GpuMat &depth, int streamIdx)
 {
 
     float * d_in, * d_out;
@@ -266,7 +266,7 @@ cv::gpu::GpuMat DVO::downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx
     int hDown = h/2;
     d_in = (float*)depth.data;
 
-    cv::gpu::GpuMat depthDown = cv::gpu::createContinuous(hDown,wDown,depth.type());
+    cv::cuda::GpuMat depthDown = cv::cuda::createContinuous(hDown,wDown,depth.type());
     d_out = (float*)depthDown.data;
 
     dim3 block = dim3(64,8,1);
@@ -313,7 +313,7 @@ __global__ void computeGradientKernel(float* outx,float *outy,const float* in, i
 }
 
 
-void DVO::computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradientx, cv::gpu::GpuMat &gradienty)
+void DVO::computeGradient(const cv::cuda::GpuMat &gray, cv::cuda::GpuMat &gradientx, cv::cuda::GpuMat &gradienty)
 {
 
     // compute gradient manually using finite differences
@@ -487,8 +487,8 @@ __global__ void g_residualKernel(const float* d_ptrGrayRef,
 }
 
 
-void DVO::calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
-                         const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
+void DVO::calculateError(const cv::cuda::GpuMat &grayRef, const cv::cuda::GpuMat &depthRef,
+                         const cv::cuda::GpuMat &grayCur, const cv::cuda::GpuMat &depthCur,
                          const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                          float* d_residuals)
 {
@@ -851,9 +851,9 @@ struct b_reduce :  public thrust::binary_function<pixelb,pixelb,pixelb>
 
 
 
-void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
-                   const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
-                   const cv::gpu::GpuMat &gradX, const cv::gpu::GpuMat &gradY,
+void DVO::deriveAnalytic(const cv::cuda::GpuMat &grayRef, const cv::cuda::GpuMat &depthRef,
+                   const cv::cuda::GpuMat &grayCur, const cv::cuda::GpuMat &depthCur,
+                   const cv::cuda::GpuMat &gradX, const cv::cuda::GpuMat &gradY,
                    const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                    float* d_residuals, bool useWeights, float* d_weights, float* d_J, Mat6f &A, Vec6f &b)
 {
@@ -952,13 +952,13 @@ void DVO::deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &
 }
 
 
-cv::gpu::GpuMat DVO::convertToContGpuMat(const cv::Mat &m) {
-    cv::gpu::GpuMat gpuM = cv::gpu::createContinuous(m.rows, m.cols, m.type());
+cv::cuda::GpuMat DVO::convertToContGpuMat(const cv::Mat &m) {
+    cv::cuda::GpuMat gpuM = cv::cuda::createContinuous(m.rows, m.cols, m.type());
     gpuM.upload(m);
     return gpuM;
 }
 
-void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::gpu::GpuMat> &depthPyramid, std::vector<cv::gpu::GpuMat> &grayPyramid)
+void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::cuda::GpuMat> &depthPyramid, std::vector<cv::cuda::GpuMat> &grayPyramid)
 {
     grayPyramid.push_back(convertToContGpuMat(gray));
     depthPyramid.push_back(convertToContGpuMat(depth));
@@ -966,9 +966,9 @@ void DVO::buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv
     for (int i = 1; i < numPyramidLevels_; ++i)
     {
         // downsample grayscale image
-        cv::gpu::GpuMat grayDown = downsampleGray(grayPyramid[i-1], 0);
+        cv::cuda::GpuMat grayDown = downsampleGray(grayPyramid[i-1], 0);
         // downsample depth image
-        cv::gpu::GpuMat depthDown = downsampleDepth(depthPyramid[i-1], 1);
+        cv::cuda::GpuMat depthDown = downsampleDepth(depthPyramid[i-1], 1);
         cudaDeviceSynchronize(); CUDA_CHECK;
 
         grayPyramid.push_back(grayDown);
@@ -981,13 +981,13 @@ void DVO::align(const cv::Mat &depthRef, const cv::Mat &grayRef, const cv::Mat &
 {
     // downsampling
 
-    std::vector<cv::gpu::GpuMat> grayRefGPUPyramid;
-    std::vector<cv::gpu::GpuMat> depthRefGPUPyramid;
+    std::vector<cv::cuda::GpuMat> grayRefGPUPyramid;
+    std::vector<cv::cuda::GpuMat> depthRefGPUPyramid;
 
     buildPyramid(depthRef, grayRef, depthRefGPUPyramid, grayRefGPUPyramid);
 
-    std::vector<cv::gpu::GpuMat> grayCurGPUPyramid;
-    std::vector<cv::gpu::GpuMat> depthCurGPUPyramid;
+    std::vector<cv::cuda::GpuMat> grayCurGPUPyramid;
+    std::vector<cv::cuda::GpuMat> depthCurGPUPyramid;
 
     buildPyramid(depthCur, grayCur, depthCurGPUPyramid, grayCurGPUPyramid);
 
@@ -995,8 +995,8 @@ void DVO::align(const cv::Mat &depthRef, const cv::Mat &grayRef, const cv::Mat &
 }
 
 
-void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const std::vector<cv::gpu::GpuMat> &grayRefGPUPyramid,
-                const std::vector<cv::gpu::GpuMat> &depthCurGPUPyramid, const std::vector<cv::gpu::GpuMat> &grayCurGPUPyramid,
+void DVO::align(const std::vector<cv::cuda::GpuMat> &depthRefGPUPyramid, const std::vector<cv::cuda::GpuMat> &grayRefGPUPyramid,
+                const std::vector<cv::cuda::GpuMat> &depthCurGPUPyramid, const std::vector<cv::cuda::GpuMat> &grayCurGPUPyramid,
                 Eigen::Matrix4f &pose)
 {
 
@@ -1024,10 +1024,10 @@ void DVO::align(const std::vector<cv::gpu::GpuMat> &depthRefGPUPyramid, const st
         int h = sizePyramid_[lvl].height;
         int n = w*h;
 
-        cv::gpu::GpuMat grayRef = grayRefGPUPyramid[lvl];
-        cv::gpu::GpuMat depthRef = depthRefGPUPyramid[lvl];
-        cv::gpu::GpuMat grayCur = grayCurGPUPyramid[lvl];
-        cv::gpu::GpuMat depthCur = depthCurGPUPyramid[lvl];
+        cv::cuda::GpuMat grayRef = grayRefGPUPyramid[lvl];
+        cv::cuda::GpuMat depthRef = depthRefGPUPyramid[lvl];
+        cv::cuda::GpuMat grayCur = grayCurGPUPyramid[lvl];
+        cv::cuda::GpuMat depthCur = depthCurGPUPyramid[lvl];
         Eigen::Matrix3f kLevel = kPyramid_[lvl];
         //std::cout << "level " << level << " (size " << depthRef.cols << "x" << depthRef.rows << ")" << std::endl;
 

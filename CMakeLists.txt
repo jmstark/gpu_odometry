@@ -21,7 +21,7 @@ FIND_PACKAGE(Eigen REQUIRED)
 INCLUDE_DIRECTORIES(${EIGEN_INCLUDE_DIR})
 
 # OpenCV
-SET(OpenCV_DIR "/home/josef/cudalab-deps/opencv-3.3.0/local-install/share/OpenCV")
+SET(OpenCV_DIR "~/cudalab-deps/opencv-3.3.0/local-install/share/OpenCV")
 FIND_PACKAGE(OpenCV REQUIRED)
 include_directories(${OpenCV_INCLUDE_DIRS})
 

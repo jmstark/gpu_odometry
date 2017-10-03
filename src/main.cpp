@@ -81,8 +81,8 @@ int main(int argc, char *argv[])
     DVO dvo;
     dvo.init(w, h, K);
 
-    std::vector<cv::gpu::GpuMat> grayRefGPUPyramid;
-    std::vector<cv::gpu::GpuMat> depthRefGPUPyramid;
+    std::vector<cv::cuda::GpuMat> grayRefGPUPyramid;
+    std::vector<cv::cuda::GpuMat> depthRefGPUPyramid;
     dvo.buildPyramid(depthRef, grayRef, depthRefGPUPyramid, grayRefGPUPyramid);
 
     // process frames
@@ -100,8 +100,8 @@ int main(int argc, char *argv[])
         cv::Mat grayCur = loadGray(dataFolder + fileColor1);
         cv::Mat depthCur = loadDepth(dataFolder + fileDepth1);
         // build pyramid
-        std::vector<cv::gpu::GpuMat> grayCurGPUPyramid;
-        std::vector<cv::gpu::GpuMat> depthCurGPUPyramid;
+        std::vector<cv::cuda::GpuMat> grayCurGPUPyramid;
+        std::vector<cv::cuda::GpuMat> depthCurGPUPyramid;
         dvo.buildPyramid(depthCur, grayCur, depthCurGPUPyramid, grayCurGPUPyramid);
 
         // frame alignment

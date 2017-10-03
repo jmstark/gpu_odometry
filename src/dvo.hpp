@@ -8,13 +8,13 @@
 #include <Eigen/Dense>
 
 #include <opencv2/core/core.hpp>
+#include <opencv2/core/cuda.hpp>
 
 #include "strided_range.hpp"
 #include <thrust/inner_product.h>
 
 #include <cuda_runtime.h>
 
-#include "opencv2/gpu/gpu.hpp"
 #include <cublas_v2.h>
 
 #define NUM_STREAMS 8
@@ -39,33 +39,33 @@ public:
 
     void init(int w, int h, const Eigen::Matrix3f &K);
 
-    void buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::gpu::GpuMat> &depthPyramid, std::vector<cv::gpu::GpuMat> &grayPyramid);
+    void buildPyramid(const cv::Mat &depth, const cv::Mat &gray, std::vector<cv::cuda::GpuMat> &depthPyramid, std::vector<cv::cuda::GpuMat> &grayPyramid);
 
     void align(const cv::Mat &depthRef, const cv::Mat &grayRef,
                const cv::Mat &depthCur, const cv::Mat &grayCur,
                Eigen::Matrix4f &pose);
 
-    void align(const std::vector<cv::gpu::GpuMat> &depthRefPyramid, const std::vector<cv::gpu::GpuMat> &grayRefPyramid,
-               const std::vector<cv::gpu::GpuMat> &depthCurPyramid, const std::vector<cv::gpu::GpuMat> &grayCurPyramid,
+    void align(const std::vector<cv::cuda::GpuMat> &depthRefPyramid, const std::vector<cv::cuda::GpuMat> &grayRefPyramid,
+               const std::vector<cv::cuda::GpuMat> &depthCurPyramid, const std::vector<cv::cuda::GpuMat> &grayCurPyramid,
                Eigen::Matrix4f &pose);
 
 private:
     cudaStream_t streams[NUM_STREAMS];
 
-    cv::gpu::GpuMat downsampleGray(const cv::gpu::GpuMat &gray, int streamIdx);
-    cv::gpu::GpuMat downsampleDepth(const cv::gpu::GpuMat &depth, int streamIdx);
+    cv::cuda::GpuMat downsampleGray(const cv::cuda::GpuMat &gray, int streamIdx);
+    cv::cuda::GpuMat downsampleDepth(const cv::cuda::GpuMat &depth, int streamIdx);
 
     void convertSE3ToTf(const Vec6f &xi, Eigen::Matrix3f &rot, Eigen::Vector3f &t);
     void convertSE3ToTf(const Vec6f &xi, Eigen::Matrix4f &pose);
     void convertTfToSE3(const Eigen::Matrix3f &rot, const Eigen::Vector3f &t, Vec6f &xi);
     void convertTfToSE3(const Eigen::Matrix4f &pose, Vec6f &xi);
 
-    cv::gpu::GpuMat convertToContGpuMat(const cv::Mat &m);
+    cv::cuda::GpuMat convertToContGpuMat(const cv::Mat &m);
 
-    void computeGradient(const cv::gpu::GpuMat &gray, cv::gpu::GpuMat &gradientx,cv::gpu::GpuMat &gradienty);
+    void computeGradient(const cv::cuda::GpuMat &gray, cv::cuda::GpuMat &gradientx,cv::cuda::GpuMat &gradienty);
     float calculateError(float* residuals, int n);
-    void calculateError(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
-                        const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
+    void calculateError(const cv::cuda::GpuMat &grayRef, const cv::cuda::GpuMat &depthRef,
+                        const cv::cuda::GpuMat &grayCur, const cv::cuda::GpuMat &depthCur,
                         const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                         float* residuals);
 
@@ -73,9 +73,9 @@ private:
     void calculateMeanStdDev(float* residuals, float &mean, float &stdDev, int n);
     void computeWeights(float* residuals, float* weights, int n);
 
-    void deriveAnalytic(const cv::gpu::GpuMat &grayRef, const cv::gpu::GpuMat &depthRef,
-                       const cv::gpu::GpuMat &grayCur, const cv::gpu::GpuMat &depthCur,
-                       const cv::gpu::GpuMat &gradX_, const cv::gpu::GpuMat &gradY_,
+    void deriveAnalytic(const cv::cuda::GpuMat &grayRef, const cv::cuda::GpuMat &depthRef,
+                       const cv::cuda::GpuMat &grayCur, const cv::cuda::GpuMat &depthCur,
+                       const cv::cuda::GpuMat &gradX_, const cv::cuda::GpuMat &gradY_,
                        const Eigen::VectorXf &xi, const Eigen::Matrix3f &K,
                        float* d_residuals, bool useWeight, float* d_weights, float* d_J, Mat6f &A, Vec6f &b);
 
@@ -86,8 +86,8 @@ private:
     bool useWeights_;
     int numIterations_;
 
-    std::vector<cv::gpu::GpuMat> gradX_;
-    std::vector<cv::gpu::GpuMat> gradY_;
+    std::vector<cv::cuda::GpuMat> gradX_;
+    std::vector<cv::cuda::GpuMat> gradY_;
     std::vector<float*> d_J_;
     std::vector<float*> d_residuals_;
     std::vector<float*> d_weights_;
