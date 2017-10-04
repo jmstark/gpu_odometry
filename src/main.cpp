@@ -24,6 +24,8 @@
 #define STR1(x)  #x
 #define STR(x)  STR1(x)
 
+#define INIT_REPEATS 10
+
 cublasHandle_t handle;
 
 int main(int argc, char *argv[])
@@ -76,16 +78,19 @@ int main(int argc, char *argv[])
             std::cout << "\nDevice doesn't contain depth generator or it is not selected." << std::endl;
             return 1;
         }
-        capture->grab();
-        cv::Mat depthIn, grayIn;
-        capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
-      	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
-        depthRef = convertDepth(depthIn);  
-        grayRef = convertGray(grayIn);  
-       	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
-	numFrames = 10000;
-	maxFrames = 10000;
-	
+        for(int i=0;i<INIT_REPEATS;i++)
+        {
+	        capture->grab();
+    	    cv::Mat depthIn, grayIn;
+    	    capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
+    	  	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
+    	    depthRef = convertDepth(depthIn);  
+    	    grayRef = convertGray(grayIn);  
+    	}
+    	   	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
+			numFrames = 10000;
+			maxFrames = 10000;
+		
     }
     //Code for initializing stuff for reading images from files
     else
@@ -134,7 +139,7 @@ int main(int argc, char *argv[])
     vizPoses.push_back(cv::Affine3f());
 
 
-    for (size_t i = 1; i < numFrames && (maxFrames < 0 || i < maxFrames); ++i)
+    for (size_t i = 1; cv::waitKey( 10 ) < 0 && i < numFrames && (maxFrames < 0 || i < maxFrames); ++i)
     {
         std::cout << "aligning frames " << (i-1) << " and " << i  << std::endl;
         double timeDepth1;
@@ -167,8 +172,7 @@ int main(int argc, char *argv[])
 	cv::imshow( "grayCur", grayCur );		
 	//cv::imshow( "depthRef", depthRef );
 	//cv::imshow( "grayRef", grayRef );
-	if( cv::waitKey( 30 ) >= 0 )
-        	break;
+
         // build pyramid
         std::vector<cv::cuda::GpuMat> grayCurGPUPyramid;
         std::vector<cv::cuda::GpuMat> depthCurGPUPyramid;
@@ -192,6 +196,7 @@ int main(int argc, char *argv[])
         grayRefGPUPyramid = grayCurGPUPyramid;
         ++framesProcessed;
 
+
         float data[] = {
             absPose(0,0),absPose(0,1),absPose(0,2),absPose(0,3),
             absPose(1,0),absPose(1,1),absPose(1,2),absPose(1,3),
@@ -210,8 +215,8 @@ int main(int argc, char *argv[])
 
         mainWindow.showWidget("line"+i,cv::viz::WLine(cv::Point3f(start),cv::Point3f(end),cv::viz::Color::green()));
         */
-        mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 0.05, cv::viz::Color::green()));
-        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 0.05, cv::viz::Color::red()));
+        mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 0.1, cv::viz::Color::green()));
+        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 0.1, cv::viz::Color::red()));
         mainWindow.spinOnce(30);
 
 
