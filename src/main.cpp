@@ -143,17 +143,20 @@ int main(int argc, char *argv[])
         double timeDepth1;
         cv::Mat depthCur;
         cv::Mat grayCur;
+        cv::Mat depthIn, grayIn;
+
+        cv::Mat colors(h,w,CV_8UC3);
 
         if(useKinect)
         {
             //get images from camera
             capture->grab();
-	    cv::Mat depthIn, grayIn;
             capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
             capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
-	    depthCur = convertDepth(depthIn);
-	    grayCur = convertGray(grayIn);
+	        depthCur = convertDepth(depthIn);
+	        grayCur = convertGray(grayIn);
             timeDepth1 = (double)cv::getTickCount()/cv::getTickFrequency();
+            colors = grayIn;
         }
         else
         {
@@ -164,6 +167,8 @@ int main(int argc, char *argv[])
         //std::cout << "File " << i << ": " << fileColor1 << ", " << fileDepth1 << std::endl;
         grayCur = loadGray(dataFolder + fileColor1);
         depthCur = loadDepth(dataFolder + fileDepth1);
+        grayCur.convertTo(colors, CV_8UC3, 255);
+
         }
 
 	cv::imshow( "depthCur", depthCur );
@@ -226,8 +231,6 @@ int main(int argc, char *argv[])
         float fyInv = 1.0f / fy;
 
         cv::Mat points(h,w,CV_32FC3);
-        cv::Mat colors(h,w,CV_8UC3);
-        grayCur.convertTo(colors, CV_8UC3, 255);
 
         double dNaN = std::numeric_limits<float>::quiet_NaN();
 
