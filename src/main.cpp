@@ -24,8 +24,6 @@
 #define STR1(x)  #x
 #define STR(x)  STR1(x)
 
-#define INIT_REPEATS 10
-
 cublasHandle_t handle;
 
 int main(int argc, char *argv[])
@@ -41,7 +39,7 @@ int main(int argc, char *argv[])
     std::vector<double> timestampsColor;
     std::vector<double> timestamps;
     cv::Mat grayRef;
-    cv::Mat depthRef;  
+    cv::Mat depthRef;
     int w, h;
     std::string dataFolder = std::string(STR(DVO_SOURCE_DIR)) + "/data/";
     cublasCreate(&handle);
@@ -78,19 +76,16 @@ int main(int argc, char *argv[])
             std::cout << "\nDevice doesn't contain depth generator or it is not selected." << std::endl;
             return 1;
         }
-        for(int i=0;i<INIT_REPEATS;i++)
-        {
-	        capture->grab();
-    	    cv::Mat depthIn, grayIn;
-    	    capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
-    	  	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
-    	    depthRef = convertDepth(depthIn);  
-    	    grayRef = convertGray(grayIn);  
-    	}
-    	   	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
-			numFrames = 10000;
-			maxFrames = 10000;
-		
+        capture->grab();
+        cv::Mat depthIn, grayIn;
+        capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
+      	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
+        depthRef = convertDepth(depthIn);
+        grayRef = convertGray(grayIn);
+       	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
+	numFrames = 10000;
+	maxFrames = 10000;
+
     }
     //Code for initializing stuff for reading images from files
     else
@@ -109,9 +104,9 @@ int main(int argc, char *argv[])
         grayRef = loadGray(dataFolder + filesColor[0]);
         depthRef = loadDepth(dataFolder + filesDepth[0]);
     }
-    
+
     w = depthRef.cols;
-    h = depthRef.rows;    
+    h = depthRef.rows;
     Eigen::Matrix4f absPose = Eigen::Matrix4f::Identity();
     std::vector<Eigen::Matrix4f> poses;
     poses.push_back(absPose);
@@ -139,7 +134,10 @@ int main(int argc, char *argv[])
     vizPoses.push_back(cv::Affine3f());
 
 
-    for (size_t i = 1; cv::waitKey( 10 ) < 0 && i < numFrames && (maxFrames < 0 || i < maxFrames); ++i)
+    mainWindow.setViewerPose(vizPoses[0]);
+
+
+    for (size_t i = 1; i < numFrames && (maxFrames < 0 || i < maxFrames); ++i)
     {
         std::cout << "aligning frames " << (i-1) << " and " << i  << std::endl;
         double timeDepth1;
@@ -153,8 +151,8 @@ int main(int argc, char *argv[])
 	    cv::Mat depthIn, grayIn;
             capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
             capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
-	    depthCur = convertDepth(depthIn);  
-	    grayCur = convertGray(grayIn);  
+	    depthCur = convertDepth(depthIn);
+	    grayCur = convertGray(grayIn);
             timeDepth1 = (double)cv::getTickCount()/cv::getTickFrequency();
         }
         else
@@ -169,10 +167,11 @@ int main(int argc, char *argv[])
         }
 
 	cv::imshow( "depthCur", depthCur );
-	cv::imshow( "grayCur", grayCur );		
+	cv::imshow( "grayCur", grayCur );
 	//cv::imshow( "depthRef", depthRef );
 	//cv::imshow( "grayRef", grayRef );
-
+	if( cv::waitKey( 30 ) >= 0 )
+        	break;
         // build pyramid
         std::vector<cv::cuda::GpuMat> grayCurGPUPyramid;
         std::vector<cv::cuda::GpuMat> depthCurGPUPyramid;
@@ -191,11 +190,10 @@ int main(int argc, char *argv[])
         absPose = absPose * relPose.inverse();
         poses.push_back(absPose);
         timestamps.push_back(timeDepth1);
-	std::cout<<absPose<<std::endl;
+	    std::cout<<absPose<<std::endl;
         depthRefGPUPyramid = depthCurGPUPyramid;
         grayRefGPUPyramid = grayCurGPUPyramid;
         ++framesProcessed;
-
 
         float data[] = {
             absPose(0,0),absPose(0,1),absPose(0,2),absPose(0,3),
@@ -215,12 +213,61 @@ int main(int argc, char *argv[])
 
         mainWindow.showWidget("line"+i,cv::viz::WLine(cv::Point3f(start),cv::Point3f(end),cv::viz::Color::green()));
         */
-        mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 0.1, cv::viz::Color::green()));
-        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 0.1, cv::viz::Color::red()));
-        mainWindow.spinOnce(30);
+        mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 0.05, cv::viz::Color::green()));
+        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 0.05, cv::viz::Color::red()));
 
 
+        //reconstruct current scene
+        float fx = K(0,0);
+        float fy = K(1,1);
+        float cx = K(0,2);
+        float cy = K(1,2);
+        float fxInv = 1.0f / fx;
+        float fyInv = 1.0f / fy;
 
+        cv::Mat points(h,w,CV_32FC3);
+        cv::Mat colors(h,w,CV_8UC3);
+        grayCur.convertTo(colors, CV_8UC3, 255);
+
+        double dNaN = std::numeric_limits<float>::quiet_NaN();
+
+
+        //std::vector<cv::Vec3f> pointcloud;
+        //std::vector<cv::viz::Color> colors;
+
+        for(int x = 0; x < w; x++) {
+	           for(int y = 0; y < h; y++) {
+                   float depth = depthCur.at<float>(y,x);
+			       if(depth > 0.0f) {
+
+			           float x0 = (static_cast<float>(x) - cx) * fxInv;
+        	           float y0 = (static_cast<float>(y) - cy) * fyInv;
+	                   float scale = 1.0f;
+
+				       float x1 = depth * x0;
+				       float y1 = depth * y0;
+				       float z1 = depth * scale;
+
+                       //float p1 = absPose(0,0) * x1 + absPose(0,1) * y1 + absPose(0,2) * z1 + absPose(0,3);
+                       //float p2 = absPose(1,0) * x1 + absPose(1,1) * y1 + absPose(1,2) * z1 + absPose(1,3);
+                       //float p3 = absPose(2,0) * x1 + absPose(2,1) * y1 + absPose(2,2) * z1 + absPose(2,3);
+
+				       //pointcloud.push_back(cv::Vec3f(x1,y1,z1));
+                       points.at<cv::Vec3f>(y,x) = cv::Vec3f(x1,y1,z1);
+                       //colors.at<cv::Vec3b>(y,x) = grayCur.at<cv::Vec3f>(y,x)[0];
+                       //colors.push_back(cv::viz::Color(grayCur.at<cv::Vec3f>(y,x)));
+                   } else {
+                       points.at<cv::Vec3f>(y,x) = cv::Vec3f(dNaN,dNaN,dNaN);
+                   }
+			            }
+	   }
+
+
+    cv::viz::WCloud cloudWidget(points, colors);
+    mainWindow.showWidget("pointCloud", cloudWidget,vizPoses[i]);
+
+    //mainWindow.setViewerPose(vizPoses[i]);
+    mainWindow.spinOnce(30);
 
 
     }
