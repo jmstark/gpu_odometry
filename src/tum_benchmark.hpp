@@ -80,6 +80,23 @@ cv::Mat loadDepth(const std::string &filename)
     return imgDepth;
 }
 
+cv::Mat convertGray(cv::Mat& imgGray)
+{
+    // convert gray to float
+    cv::Mat gray;
+    imgGray.convertTo(gray, CV_32FC1, 1.0f / 255.0f);
+    return gray;
+}
+
+
+cv::Mat convertDepth(cv::Mat& imgDepthIn)
+{
+    //fill/read 16 bit depth image
+    cv::Mat imgDepth;
+    imgDepthIn.convertTo(imgDepth, CV_32FC1, (1.0 / 5000.0));
+    return imgDepth;
+}
+
 
 bool savePoses(const std::string &filename, const std::vector<Eigen::Matrix4f> &poses, const std::vector<double> &timestamps)
 {

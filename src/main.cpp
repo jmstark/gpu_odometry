@@ -73,11 +73,16 @@ int main(int argc, char *argv[])
             std::cout << "\nDevice doesn't contain depth generator or it is not selected." << std::endl;
             return 1;
         }
-        //get (first) reference images from camera
         capture->grab();
-        capture->retrieve( depthRef, cv::CAP_OPENNI_DEPTH_MAP );
-        capture->retrieve( grayRef, cv::CAP_OPENNI_GRAY_IMAGE );
-        timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
+        cv::Mat depthIn, grayIn;
+        capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
+      	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
+        depthRef = convertDepth(depthIn);  
+        grayRef = convertGray(grayIn);  
+       	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
+	numFrames = 10000;
+	maxFrames = 10000;
+	
     }
     //Code for initializing stuff for reading images from files
     else
@@ -124,8 +129,11 @@ int main(int argc, char *argv[])
         {
             //get images from camera
             capture->grab();
-            capture->retrieve( depthCur, cv::CAP_OPENNI_DEPTH_MAP );
-            capture->retrieve( grayCur, cv::CAP_OPENNI_GRAY_IMAGE );  
+	    cv::Mat depthIn, grayIn;
+            capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
+            capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
+	    depthCur = convertDepth(depthIn);  
+	    grayCur = convertGray(grayIn);  
             timeDepth1 = (double)cv::getTickCount()/cv::getTickFrequency();
         }
         else
@@ -138,6 +146,13 @@ int main(int argc, char *argv[])
         grayCur = loadGray(dataFolder + fileColor1);
         depthCur = loadDepth(dataFolder + fileDepth1);
         }
+
+	cv::imshow( "depthCur", depthCur );
+	cv::imshow( "grayCur", grayCur );		
+	cv::imshow( "depthRef", depthRef );
+	cv::imshow( "grayRef", grayRef );
+	if( cv::waitKey( 30 ) >= 0 )
+        	break;
         // build pyramid
         std::vector<cv::cuda::GpuMat> grayCurGPUPyramid;
         std::vector<cv::cuda::GpuMat> depthCurGPUPyramid;
@@ -156,7 +171,7 @@ int main(int argc, char *argv[])
         absPose = absPose * relPose.inverse();
         poses.push_back(absPose);
         timestamps.push_back(timeDepth1);
-
+	std::cout<<absPose<<std::endl;
         depthRefGPUPyramid = depthCurGPUPyramid;
         grayRefGPUPyramid = grayCurGPUPyramid;
         ++framesProcessed;
