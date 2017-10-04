@@ -152,7 +152,7 @@ int main(int argc, char *argv[])
             //get images from camera
             capture->grab();
             capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
-            capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
+            capture->retrieve( grayIn, cv::CAP_OPENNI_BGR_IMAGE );
 	        depthCur = convertDepth(depthIn);
 	        grayCur = convertGray(grayIn);
             timeDepth1 = (double)cv::getTickCount()/cv::getTickFrequency();
@@ -218,8 +218,8 @@ int main(int argc, char *argv[])
 
         mainWindow.showWidget("line"+i,cv::viz::WLine(cv::Point3f(start),cv::Point3f(end),cv::viz::Color::green()));
         */
-        mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 0.05, cv::viz::Color::green()));
-        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 0.05, cv::viz::Color::red()));
+        mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 1, cv::viz::Color::green()));
+        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 1, cv::viz::Color::red()));
 
 
         //reconstruct current scene
@@ -269,7 +269,8 @@ int main(int argc, char *argv[])
     cv::viz::WCloud cloudWidget(points, colors);
     mainWindow.showWidget("pointCloud", cloudWidget,vizPoses[i]);
 
-    //mainWindow.setViewerPose(vizPoses[i]);
+    //cv::Affine3f viewerPose = vizPoses[i];
+    //mainWindow.setViewerPose(viewerPose.translate(cv::Vec3f(0,0,-2)));
     mainWindow.spinOnce(30);
 
 
