@@ -89,6 +89,8 @@ int main(int argc, char *argv[])
       	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
         depthRef = convertDepth(depthIn);  
         grayRef = convertGray(grayIn);  
+        cv::flip(grayRef,grayRef,1);
+	cv::flip(depthRef,depthRef,1);
        	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
 	numFrames = 10000;
 	maxFrames = 10000;
@@ -159,6 +161,9 @@ int main(int argc, char *argv[])
             capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
 	    depthCur = convertDepth(depthIn);  
 	    grayCur = convertGray(grayIn);  
+        cv::flip(grayCur,grayCur,1);
+        cv::flip(depthCur,depthCur,1);
+
             timeDepth1 = (double)cv::getTickCount()/cv::getTickFrequency();
         }
         else
