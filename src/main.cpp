@@ -76,10 +76,14 @@ int main(int argc, char *argv[])
             std::cout << "\nDevice doesn't contain depth generator or it is not selected." << std::endl;
             return 1;
         }
-        capture->grab();
         cv::Mat depthIn, grayIn;
-        capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
-      	capture->retrieve( grayIn, cv::CAP_OPENNI_GRAY_IMAGE );
+
+	// discard first few frames
+        for(int i = 0; i < 5 ; i++) {
+	    capture->grab();
+            capture->retrieve( depthIn, cv::CAP_OPENNI_DEPTH_MAP );
+      	    capture->retrieve( grayIn, cv::CAP_OPENNI_BGR_IMAGE );
+        }
         depthRef = convertDepth(depthIn);
         grayRef = convertGray(grayIn);
        	timestamps.push_back((double)cv::getTickCount()/cv::getTickFrequency());
@@ -99,7 +103,7 @@ int main(int argc, char *argv[])
             return 1;
         }
         numFrames = filesDepth.size();
-        maxFrames = 100;
+        maxFrames = 600;
         timestamps.push_back(timestampsDepth[0]);
         grayRef = loadGray(dataFolder + filesColor[0]);
         depthRef = loadDepth(dataFolder + filesDepth[0]);
@@ -175,8 +179,7 @@ int main(int argc, char *argv[])
 	cv::imshow( "grayCur", grayCur );
 	//cv::imshow( "depthRef", depthRef );
 	//cv::imshow( "grayRef", grayRef );
-	if( cv::waitKey( 30 ) >= 0 )
-        	break;
+
         // build pyramid
         std::vector<cv::cuda::GpuMat> grayCurGPUPyramid;
         std::vector<cv::cuda::GpuMat> depthCurGPUPyramid;
@@ -219,7 +222,7 @@ int main(int argc, char *argv[])
         mainWindow.showWidget("line"+i,cv::viz::WLine(cv::Point3f(start),cv::Point3f(end),cv::viz::Color::green()));
         */
         mainWindow.showWidget("cameras_line",cv::viz::WTrajectory(vizPoses, cv::viz::WTrajectory::PATH, 1, cv::viz::Color::green()));
-        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 1, cv::viz::Color::red()));
+        mainWindow.showWidget("cameras_frustums", cv::viz::WTrajectoryFrustums(vizPoses, vizK, 0.1, cv::viz::Color::red()));
 
 
         //reconstruct current scene
@@ -269,10 +272,18 @@ int main(int argc, char *argv[])
     cv::viz::WCloud cloudWidget(points, colors);
     mainWindow.showWidget("pointCloud", cloudWidget,vizPoses[i]);
 
-    //cv::Affine3f viewerPose = vizPoses[i];
-    //mainWindow.setViewerPose(viewerPose.translate(cv::Vec3f(0,0,-2)));
-    mainWindow.spinOnce(30);
-
+    /*
+    // calculate a translation offset and rotate it in order to get
+    // the right direction towards current frame
+    cv::Affine3f tOffset = cv::Affine3f::Identity();
+    tOffset.translation(cv::Vec3f(0,0,-2));
+    //tOffset = tOffset.rotate(vizPoses
+    
+    //viewer pose
+    cv::Affine3f viewerPose = vizPoses[i] * tOffset;
+    */
+    //mainWindow.setViewerPose(viewerPose);
+    mainWindow.spinOnce();
 
     }
     std::cout << "average runtime: " << (runtimeAvg / framesProcessed) * 1000.0 << " ms" << std::endl;
