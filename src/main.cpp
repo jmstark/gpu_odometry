@@ -198,7 +198,6 @@ int main(int argc, char *argv[])
         absPose = absPose * relPose.inverse();
         poses.push_back(absPose);
         timestamps.push_back(timeDepth1);
-	std::cout<<absPose<<std::endl;
         depthRefGPUPyramid = depthCurGPUPyramid;
         grayRefGPUPyramid = grayCurGPUPyramid;
         ++framesProcessed;
