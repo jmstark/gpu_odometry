@@ -25,11 +25,11 @@ else
 	echo "Could not find local OpenCV install ${ABS_INSTALL_PATH}; commencing build."
 fi
 
-#rm -f "${DL_FILENAME}.${DL_FILENAME_EXT}"
-#rm -rf "${FOLDERNAME_UNPACKED}"
-#wget "${DL_PATH}${DL_FILENAME}.${DL_FILENAME_EXT}"
-#unzip -q "${DL_FILENAME}.${DL_FILENAME_EXT}"
-#rm "${DL_FILENAME}.${DL_FILENAME_EXT}"
+rm -f "${DL_FILENAME}.${DL_FILENAME_EXT}"
+rm -rf "${FOLDERNAME_UNPACKED}"
+wget "${DL_PATH}${DL_FILENAME}.${DL_FILENAME_EXT}"
+unzip -q "${DL_FILENAME}.${DL_FILENAME_EXT}"
+rm "${DL_FILENAME}.${DL_FILENAME_EXT}"
 cd "${FOLDERNAME_UNPACKED}"
 mkdir $REL_BUILD_PATH
 cd $REL_BUILD_PATH
@@ -43,14 +43,3 @@ cmake -DCMAKE_BUILD_TYPE=RELEASE -DBUILD_SHARED_LIBS=ON -DCUDA_TOOLKIT_ROOT_DIR=
 ..
 make -j2
 make install
-
-
-# -DOPENNI_PRIME_SENSOR_MODULE_BIN_DIR=/usr/prakt/s164/cudalab-deps/OpenNI2/Bin/x64-Release/OpenNI2/Drivers \
-#-DOPENNI2_LIB_DIR=/home/josef/git/cudalab/third_party/OpenNI2/Bin/x64-Release/ \
-#-DOPENNI2_INCLUDE_DIR=/home/josef/git/cudalab/third_party/OpenNI2/Include/ \
-#-DOPENNI2_INSTALL_PATH=/home/josef/git/cudalab/third_party/OpenNI2/ \
-
-
-#-DBUILD_opencv_core=ON -DBUILD_opencv_flann=ON -DBUILD_opencv_imgproc=ON -DBUILD_opencv_highgui=ON \
-#-DBUILD_opencv_features2d=ON -DBUILD_opencv_calib3d=ON -DBUILD_opencv_ml=ON -DBUILD_opencv_video=ON \
-#-DBUILD_opencv_legacy=ON -DBUILD_opencv_objdetect=ON -DBUILD_opencv_photo=ON -DBUILD_opencv_gpu=ON \
