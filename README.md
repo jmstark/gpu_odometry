@@ -1,5 +1,4 @@
 Robust odometry estimation with visualization, CUDA-acceleration and ASUS Xtion 0601 support
-
 =============================================
 
 
