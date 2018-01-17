@@ -1,9 +1,13 @@
 Robust odometry estimation with visualization, CUDA-acceleration and ASUS Xtion 0601 support  
 =============================================  
   
+Based on Robert Maier's CPU-only code for robust odometry estimation (see paper by Christian Kerl, Jürgen Sturm, and Daniel Cremers here: http://vision.cs.tum.edu/_media/spezial/bib/kerl13icra.pdf),  
+this project adds GPU-acceleration by using NVIDIA's CUDA-framework, visualization and support for the kinect-like ASUS Xtion 0601 device.  
+  
+============================================  
   
 Usage:  
-First:  
+  
 $ cd build-release   
   
 Dataset Mode:  
@@ -36,13 +40,14 @@ For building the project in the TUM CUDA-lab, the required dependencies can be f
 It is compiled against the custom OpenNI2 (found in the same parent folder) needed for the ASUS Xtion 0601. You only need to adapt the path to OpenCV in CMakeLists.txt.  
   
   
-  
+If you want to compile everything yourself:  
 The project depends on OpenNI2 from the 'develop' branch of https://github.com/occipital/OpenNI2 and a custom OpenCV 3.3.  
 OpenCV 3.3 requires, apart from the standard modules, support for cuda, cudalegacy, vtk and OpenNI2 compiled in.  
 Executing ./dl_and_build_local_opencv_cuda_enabled.sh takes care of compiling OpenCV with the respective settings and installing it into ~/cudalab-deps/opencv-3.3.0/local-install.  
 Make sure to read and understand it before you run it. Do so at your own risk.  
   
-Before compiling OpenCV, you need to build OpenNI2 (Instructions for doing so on a TUM CUDA lab PC without root access):  
+Before compiling OpenCV, you need to build OpenNI2.  
+Instructions for doing so on a TUM CUDA lab PC without root access:  
 Clone develop branch of https://github.com/occipital/OpenNI2/tree/develop  
 $ apt-get download libudev-dev  
 $ dpkg -x libudev-dev_229-4ubuntu19_amd64.deb libudev-install/  
